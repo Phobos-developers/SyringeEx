@@ -45,8 +45,8 @@ inline auto parse_command_line(const std::vector<std::string>& arguments)
 
     for (const auto& arg : arguments)
     {
-        // executable name: first argument not starting with '--'
-        if (!exe_found && !arg.starts_with("--"))
+        // executable name: first argument not starting with '-'
+        if (!exe_found && !arg.starts_with("-"))
         {
             exe_found = true;
             ret.executable_name = arg;
