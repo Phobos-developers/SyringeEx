@@ -84,7 +84,7 @@ int Run(const std::vector<std::string>& arguments)
     {
         MessageBoxA(
             nullptr, "Syringe cannot be run like that.\n\n"
-            "Usage:\nSyringe.exe [-i=<injectedfile.dll> ...] \"<exe name>\" <arguments>",
+            "Usage:\nSyringe.exe <exe name> [-i=<injectedfile.dll> ...] [--args=\"<arguments>\"]",
             VersionString, MB_OK | MB_ICONINFORMATION);
 
         Log::WriteLine(
