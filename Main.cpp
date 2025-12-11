@@ -16,7 +16,8 @@ std::vector<std::string> GetArguments()
 
     // Convert to UTF-8. Skip the first argument as it contains the path to Syringe itself
     std::vector<std::string> argv(argc - 1);
-    for (int i = 1; i < argc; ++i) {
+    for (int i = 1; i < argc; ++i)
+    {
         int len = WideCharToMultiByte(CP_UTF8, 0, argvW[i], -1, nullptr, 0, nullptr, nullptr);
         argv[i - 1].resize(len - 1);
         WideCharToMultiByte(CP_UTF8, 0, argvW[i], -1, argv[i - 1].data(), len, nullptr, nullptr);
