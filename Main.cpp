@@ -6,8 +6,29 @@
 #include <string>
 
 #include <commctrl.h>
+#include <shellapi.h>
 
-int Run(std::string_view const arguments)
+std::vector<std::string> GetArguments()
+{
+    // Get argc, argv in wide chars
+    int argc = 0;
+    LPWSTR* argvW = CommandLineToArgvW(GetCommandLineW(), &argc);
+
+    // Convert to UTF-8. Skip the first argument as it contains the path to Syringe itself
+    std::vector<std::string> argv(argc - 1);
+    for (int i = 1; i < argc; ++i)
+    {
+        int len = WideCharToMultiByte(CP_UTF8, 0, argvW[i], -1, nullptr, 0, nullptr, nullptr);
+        argv[i - 1].resize(len - 1);
+        WideCharToMultiByte(CP_UTF8, 0, argvW[i], -1, argv[i - 1].data(), len, nullptr, nullptr);
+    }
+
+    LocalFree(argvW);
+
+    return argv;
+}
+
+int Run(const std::vector<std::string>& arguments)
 {
     constexpr auto const VersionString = "SyringeEx " SYRINGEEX_VER_TEXT ", based on Syringe 0.7.2.0";
 
@@ -25,14 +46,14 @@ int Run(std::string_view const arguments)
 
     try
     {
-        auto const command = get_command_line(arguments);
+        auto const command = parse_command_line(arguments);
 
         Log::WriteLine(
             "WinMain: Trying to load executable file \"%.*s\"...",
-            printable(command.executable));
+            printable(command.executable_name));
         Log::WriteLine();
 
-        SyringeDebugger Debugger{ command.executable, command.flags };
+        SyringeDebugger Debugger{ command.executable_name, command.syringe_arguments };
         failure = "Could not run executable.";
 
         Log::WriteLine("WinMain: SyringeDebugger::FindDLLs();");
@@ -41,10 +62,10 @@ int Run(std::string_view const arguments)
 
         Log::WriteLine(
             "WinMain: SyringeDebugger::Run(\"%.*s\");",
-            printable(command.arguments));
+            printable(command.game_arguments));
         Log::WriteLine();
 
-        Debugger.Run(command.arguments);
+        Debugger.Run(command.game_arguments);
         Log::WriteLine("WinMain: SyringeDebugger::Run finished.");
         Log::WriteLine("WinMain: Exiting on success.");
         return ERROR_SUCCESS;
@@ -63,7 +84,7 @@ int Run(std::string_view const arguments)
     {
         MessageBoxA(
             nullptr, "Syringe cannot be run like that.\n\n"
-            "Usage:\nSyringe.exe [-i=<injectedfile.dll> ...] \"<exe name>\" <arguments>",
+            "Usage:\nSyringe.exe <exe name> [-i=<injectedfile.dll> ...] [--args=\"<arguments>\"]",
             VersionString, MB_OK | MB_ICONINFORMATION);
 
         Log::WriteLine(
@@ -80,7 +101,8 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, _
 {
     UNREFERENCED_PARAMETER(hInstance);
     UNREFERENCED_PARAMETER(hPrevInstance);
+    UNREFERENCED_PARAMETER(lpCmdLine);
     UNREFERENCED_PARAMETER(nCmdShow);
 
-    return Run(lpCmdLine);
+    return Run(GetArguments());
 }
