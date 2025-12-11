@@ -7,6 +7,7 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 #include <Windows.h>
 
@@ -25,43 +26,50 @@ inline auto trim(std::string_view string) noexcept
     return string;
 }
 
-inline auto get_command_line(std::string_view arguments)
+inline auto parse_command_line(const std::vector<std::string>& arguments)
 {
     struct argument_set
     {
-        std::string_view flags;
-        std::string_view executable;
-        std::string_view arguments;
+        std::vector<std::string> syringe_arguments;
+        std::string executable_name;
+        std::string game_arguments;
     };
 
-    try
-    {
-        argument_set ret;
+    if (arguments.empty())
+        throw invalid_command_arguments{};
 
-        auto const end_flags = arguments.find('"');
-        ret.flags = trim(arguments.substr(0, end_flags));
-        if (end_flags != std::string_view::npos)
+    argument_set ret;
+
+    // First non-flag argument becomes executable name
+    bool exe_found = false;
+
+    for (const auto& arg : arguments)
+    {
+        // executable name: first argument not starting with '--'
+        if (!exe_found && !arg.starts_with("--"))
         {
-            arguments.remove_prefix(end_flags + 1);
-
-            auto const end_executable = arguments.find('"');
-            if (end_executable != std::string_view::npos)
-            {
-                ret.executable = trim(arguments.substr(0, end_executable));
-                arguments.remove_prefix(end_executable + 1);
-
-                ret.arguments = trim(arguments);
-
-                return ret;
-            }
+            exe_found = true;
+            ret.executable_name = arg;
+            continue;
         }
-    }
-    catch (...)
-    {
-        // swallow everything, throw new one
+
+        // game arguments: --args="blob"
+        if (arg.starts_with("--args="))
+        {
+            // extract after --args=
+            std::string blob = arg.substr(std::size("--args=")-1);
+            ret.game_arguments = blob;
+            continue;
+        }
+
+        // Syringe arguments
+        ret.syringe_arguments.push_back(arg);
     }
 
-    throw invalid_command_arguments{};
+    if (!exe_found || ret.executable_name.empty())
+        throw invalid_command_arguments{};
+
+    return ret;
 }
 
 inline std::string replace(
@@ -91,6 +99,21 @@ inline std::string replace(
 inline auto printable(std::string_view const string) noexcept
 {
     return std::make_pair(string.size(), string.data());
+}
+
+inline auto printable(const std::vector<std::string>& arguments) noexcept
+{
+    static thread_local std::string buffer;
+    buffer.clear();
+
+    // Join arguments with spaces
+    for (size_t i = 0; i < arguments.size(); ++i) {
+        buffer += arguments[i];
+        if (i + 1 < arguments.size())
+            buffer += ' ';
+    }
+
+    return std::make_pair(buffer.size(), buffer.data());
 }
 
 inline auto GetFormatMessage(DWORD const error)

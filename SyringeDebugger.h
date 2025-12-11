@@ -28,24 +28,21 @@ class SyringeDebugger
     static constexpr std::string_view INCLUDE_FLAG = "-i=";
 
 public:
-    SyringeDebugger(std::string_view filename, std::string_view flags = "")
+    SyringeDebugger(std::string_view filename, std::vector<std::string> flags = {})
         : exe(filename)
     {
         // parse all -i=filename_to_inject from flags
-        for (auto const flag : std::views::split(flags, " "sv))
+        for (auto const& flag : flags)
         {
             auto const flagView = std::string_view{ flag.begin(), flag.end() };
             auto const pos = flagView.find(INCLUDE_FLAG);
             if (pos != std::string_view::npos)
             {
-                dlls.emplace_back(std::string{ flagView.begin() + pos + INCLUDE_FLAG.size(),
-                                              flagView.end() });
+                dlls.emplace_back(flagView.begin() + pos + INCLUDE_FLAG.size(), flagView.end());
             }
             else
             {
-                Log::WriteLine(
-                    __FUNCTION__ ": Unknown flag \"%.*s\", skipping.",
-                    printable(flagView));
+                Log::WriteLine(__FUNCTION__ ": Unknown flag \"%.*s\", skipping.", printable(flagView));
             }
         }
 
