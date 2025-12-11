@@ -28,6 +28,8 @@ inline auto trim(std::string_view string) noexcept
 
 inline auto parse_command_line(const std::vector<std::string>& arguments)
 {
+    static constexpr std::string_view ARGS_FLAG = "--args=";
+
     struct argument_set
     {
         std::vector<std::string> syringe_arguments;
@@ -54,10 +56,10 @@ inline auto parse_command_line(const std::vector<std::string>& arguments)
         }
 
         // game arguments: --args="blob"
-        if (arg.starts_with("--args="))
+        if (arg.starts_with(ARGS_FLAG))
         {
             // extract after --args=
-            std::string blob = arg.substr(std::size("--args=")-1);
+            std::string blob = arg.substr(ARGS_FLAG.size());
             ret.game_arguments = blob;
             continue;
         }
