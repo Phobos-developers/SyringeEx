@@ -619,9 +619,10 @@ void SyringeDebugger::Run(std::string_view const arguments)
 
         WaitForSingleObject(pInfo.hProcess, INFINITE);
 
-        DWORD exitCode = 0;
-        if (GetExitCodeProcess(pInfo.hProcess, &exitCode))
-            Log::WriteLine(__FUNCTION__ ": Process exited with code %X (%u).", exitCode, exitCode);
+        if (!GetExitCodeProcess(pInfo.hProcess, &exit_code))
+        {
+            Log::WriteLine(__FUNCTION__ ": Failed to get process exit code!");
+        }
     }
 
     CloseHandle(pInfo.hProcess);
