@@ -33,10 +33,11 @@ public:
     SyringeDebugger(std::string_view filename, std::vector<std::string> flags = {})
         : exe(filename)
     {
-        // parse all -i=filename_to_inject from flags
         for (auto const& flag : flags)
         {
             std::string_view const flagView = flag;
+
+            // parse all -i=filename_to_inject from flags
             if (auto const pos = flagView.find(INCLUDE_FLAG); pos != std::string_view::npos)
             {
                 dlls.emplace_back(flagView.begin() + pos + INCLUDE_FLAG.size(), flagView.end());
