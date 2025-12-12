@@ -28,6 +28,7 @@ class SyringeDebugger
     static constexpr std::string_view INCLUDE_FLAG = "-i=";
     static constexpr std::string_view NODETACH_FLAG = "--nodetach";
     static constexpr std::string_view NOWAIT_FLAG = "--nowait";
+    static constexpr std::string_view HANDSHAKES_FLAG = "--handshakes";
 
 public:
     SyringeDebugger(std::string_view filename, std::vector<std::string> flags = {})
@@ -49,6 +50,10 @@ public:
             else if (auto const pos = flagView.find(NOWAIT_FLAG); pos != std::string_view::npos)
             {
                 bWaitForProcessEnd = false;
+            }
+            else if (auto const pos = flagView.find(HANDSHAKES_FLAG); pos != std::string_view::npos)
+            {
+                bHandshakes = true;
             }
             else
             {
@@ -151,6 +156,7 @@ private:
 
     bool bDetachWhenDone{ true };
     bool bWaitForProcessEnd{ true };
+    bool bHandshakes{ false };
 
     bool bDLLsLoaded{ false };
     bool bHooksCreated{ false };

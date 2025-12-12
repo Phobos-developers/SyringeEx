@@ -760,12 +760,9 @@ void SyringeDebugger::FindDLLs()
 
                 if (canLoad)
                 {
-                    Log::WriteLine(
-                        __FUNCTION__ ": Recognized DLL: \"%.*s\"", printable(fn));
+                    Log::WriteLine(__FUNCTION__ ": Recognized DLL: \"%.*s\"", printable(fn));
 
-                    if (auto const res = Handshake(
-                        DLL.GetFilename(), static_cast<int>(buffer.count),
-                        buffer.checksum.value()))
+                    if (auto const res = Handshake(DLL.GetFilename(), static_cast<int>(buffer.count), buffer.checksum.value()))
                     {
                         canLoad = *res;
                     }
@@ -789,9 +786,7 @@ void SyringeDebugger::FindDLLs()
                 }
                 else if (!buffer.hooks.empty())
                 {
-                    Log::WriteLine(
-                        __FUNCTION__ ": DLL load was prevented: \"%.*s\"",
-                        printable(fn));
+                    Log::WriteLine(__FUNCTION__ ": DLL load was prevented: \"%.*s\"", printable(fn));
                 }
             }
             catch (...)
@@ -933,6 +928,12 @@ std::optional<bool> SyringeDebugger::Handshake(
     char const* const lib, int const hooks, unsigned int const crc)
 {
     std::optional<bool> ret;
+
+    if (!bHandshakes)
+    {
+        Log::WriteLine(__FUNCTION__ ": Skipping handshake for DLL: \"%s\"", lib);
+        return ret;
+    }
 
     if (auto const hLib = ModuleHandle(LoadLibrary(lib)))
     {
