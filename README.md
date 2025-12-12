@@ -51,3 +51,30 @@ syringe.exe game.exe -i=ExtensionA.dll -i=ExtensionB.dll
 ```
 
 When at least one `-i=` option is present, **only the specified DLLs** are injected.
+
+### Debugger Detach and Process Lifetime
+
+By default, Syringe detaches its debugger automatically once all hooks have been placed, allowing the target process to continue execution normally.
+
+This behavior can be modified using the following flags:
+
+- `--nodetach`  
+  Keeps the debugger attached after injection instead of detaching automatically.
+
+- `--nowait`  
+  Causes Syringe to exit immediately after detaching, without waiting for the target process to terminate.
+
+By default (without `--nowait`), Syringe remains running after detaching and waits until the target process exits.
+
+Example:
+
+```
+syringe.exe game.exe --nodetach
+```
+
+```
+syringe.exe game.exe --nowait
+```
+
+These options can be combined to precisely control debugger lifetime and process synchronization behavior.
+

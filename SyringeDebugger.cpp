@@ -32,21 +32,23 @@ void SyringeDebugger::DebugProcess(std::string_view const arguments)
     {
         throw_lasterror_or(ERROR_ERRORS_ENCOUNTERED, exe);
     }
+
+    workingHandle = pInfo.hProcess;
 }
 
 bool SyringeDebugger::PatchMem(void* address, void const* buffer, DWORD size)
 {
-    return (WriteProcessMemory(pInfo.hProcess, address, buffer, size, nullptr) != FALSE);
+    return (WriteProcessMemory(workingHandle, address, buffer, size, nullptr) != FALSE);
 }
 
 bool SyringeDebugger::ReadMem(void const* address, void* buffer, DWORD size)
 {
-    return (ReadProcessMemory(pInfo.hProcess, address, buffer, size, nullptr) != FALSE);
+    return (ReadProcessMemory(workingHandle, address, buffer, size, nullptr) != FALSE);
 }
 
 VirtualMemoryHandle SyringeDebugger::AllocMem(void* address, size_t size)
 {
-    if (VirtualMemoryHandle res{ pInfo.hProcess, address, size })
+    if (VirtualMemoryHandle res{ workingHandle, address, size })
     {
         return res;
     }
@@ -546,20 +548,17 @@ void SyringeDebugger::Run(std::string_view const arguments)
 
     auto exit_code = static_cast<DWORD>(-1);
 
-    for (;;)
+    while (true)
     {
         WaitForDebugEvent(&dbgEvent, INFINITE);
 
         DWORD continueStatus = DBG_CONTINUE;
-        bool wasBP = false;
+        bool wasSingleStep = false;
 
         switch (dbgEvent.dwDebugEventCode)
         {
         case CREATE_PROCESS_DEBUG_EVENT:
-            pInfo.hProcess = dbgEvent.u.CreateProcessInfo.hProcess;
-            pInfo.dwThreadId = dbgEvent.dwProcessId;
-            pInfo.hThread = dbgEvent.u.CreateProcessInfo.hThread;
-            pInfo.dwThreadId = dbgEvent.dwThreadId;
+            workingHandle = dbgEvent.u.CreateProcessInfo.hProcess;
             Threads.emplace(dbgEvent.dwThreadId, dbgEvent.u.CreateProcessInfo.hThread);
             CloseHandle(dbgEvent.u.CreateProcessInfo.hFile);
             break;
@@ -578,7 +577,7 @@ void SyringeDebugger::Run(std::string_view const arguments)
 
         case EXCEPTION_DEBUG_EVENT:
             continueStatus = HandleException(dbgEvent);
-            wasBP = (dbgEvent.u.Exception.ExceptionRecord.ExceptionCode == EXCEPTION_BREAKPOINT);
+            wasSingleStep = (dbgEvent.u.Exception.ExceptionRecord.ExceptionCode == EXCEPTION_SINGLE_STEP);
             break;
 
         case LOAD_DLL_DEBUG_EVENT:
@@ -600,6 +599,30 @@ void SyringeDebugger::Run(std::string_view const arguments)
         }
 
         ContinueDebugEvent(dbgEvent.dwProcessId, dbgEvent.dwThreadId, continueStatus);
+
+        if (bDetachWhenDone && bHooksCreated && wasSingleStep)
+        {
+            Log::WriteLine(__FUNCTION__ ": Hooks placed, detaching debugger.");
+
+            if (!DebugActiveProcessStop(dbgEvent.dwProcessId))
+                Log::WriteLine(__FUNCTION__ ": DebugActiveProcessStop failed (%u).", GetLastError());
+
+            break;
+        }
+    }
+
+    workingHandle = nullptr;
+
+    if (bWaitForProcessEnd)
+    {
+        Log::WriteLine(__FUNCTION__ ": Waiting for process to exit...");
+
+        WaitForSingleObject(pInfo.hProcess, INFINITE);
+
+        if (!GetExitCodeProcess(pInfo.hProcess, &exit_code))
+        {
+            Log::WriteLine(__FUNCTION__ ": Failed to get process exit code!");
+        }
     }
 
     CloseHandle(pInfo.hProcess);

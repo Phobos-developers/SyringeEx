@@ -26,19 +26,29 @@ class SyringeDebugger
     static constexpr BYTE NOP = 0x90;
 
     static constexpr std::string_view INCLUDE_FLAG = "-i=";
+    static constexpr std::string_view NODETACH_FLAG = "--nodetach";
+    static constexpr std::string_view NOWAIT_FLAG = "--nowait";
 
 public:
     SyringeDebugger(std::string_view filename, std::vector<std::string> flags = {})
         : exe(filename)
     {
-        // parse all -i=filename_to_inject from flags
         for (auto const& flag : flags)
         {
-            auto const flagView = std::string_view{ flag.begin(), flag.end() };
-            auto const pos = flagView.find(INCLUDE_FLAG);
-            if (pos != std::string_view::npos)
+            std::string_view const flagView = flag;
+
+            // parse all -i=filename_to_inject from flags
+            if (auto const pos = flagView.find(INCLUDE_FLAG); pos != std::string_view::npos)
             {
                 dlls.emplace_back(flagView.begin() + pos + INCLUDE_FLAG.size(), flagView.end());
+            }
+            else if (auto const pos = flagView.find(NODETACH_FLAG); pos != std::string_view::npos)
+            {
+                bDetachWhenDone = false;
+            }
+            else if (auto const pos = flagView.find(NOWAIT_FLAG); pos != std::string_view::npos)
+            {
+                bWaitForProcessEnd = false;
             }
             else
             {
@@ -101,6 +111,7 @@ private:
 
     // process info
     PROCESS_INFORMATION pInfo;
+    HANDLE workingHandle { nullptr };
 
     // flags
     bool bEntryBP{ true };
@@ -137,6 +148,9 @@ private:
     DWORD dwTimeStamp{ 0u };
     DWORD dwExeSize{ 0u };
     DWORD dwExeCRC{ 0u };
+
+    bool bDetachWhenDone{ true };
+    bool bWaitForProcessEnd{ true };
 
     bool bDLLsLoaded{ false };
     bool bHooksCreated{ false };

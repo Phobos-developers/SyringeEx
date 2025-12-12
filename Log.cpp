@@ -55,6 +55,7 @@ void Log::WriteLine(char const* const pFormat, ...) noexcept
         WriteTimestamp();
         vfprintf(File, pFormat, args);
         WriteLine();
+        fflush(File);
 
         va_end(args);
     }
