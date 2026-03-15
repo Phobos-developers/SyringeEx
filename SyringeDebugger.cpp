@@ -11,6 +11,7 @@
 #include <fstream>
 #include <memory>
 #include <numeric>
+#include <set>
 
 #include <DbgHelp.h>
 
@@ -144,6 +145,73 @@ DWORD SyringeDebugger::HandleException(DEBUG_EVENT const& dbgEvent)
             {
                 Log::WriteLine(__FUNCTION__ ": Finished retrieving proc addresses.");
                 bDLLsLoaded = true;
+
+                if (!v_FeatureFlags.empty())
+                {
+                    Log::WriteLine(__FUNCTION__ ": Starting feature flags resolution...");
+                    loop_FeatureFlags = v_FeatureFlags.begin();
+                    auto const& entry = *loop_FeatureFlags;
+                    PatchMem(&GetData()->LibName, entry.lib, MaxNameLength);
+                    PatchMem(&GetData()->ProcName, entry.symbol, MaxNameLength);
+
+                    context.Eip = reinterpret_cast<DWORD>(&GetData()->LoadLibraryFunc);
+                }
+                else
+                {
+                    bFeaturesSet = true;
+                    context.Eip = reinterpret_cast<DWORD>(pcEntryPoint);
+                }
+            }
+
+            // single step mode
+            context.EFlags |= 0x100;
+            context.ContextFlags = CONTEXT_CONTROL;
+            SetThreadContext(currentThread, &context);
+
+            threadInfo.lastBP = exceptAddr;
+
+            return DBG_CONTINUE;
+        }
+
+        // set feature flags in loaded DLLs
+        if (!bFeaturesSet)
+        {
+            // restore
+            PatchMem(exceptAddr, &Breakpoints[exceptAddr].original_opcode, 1);
+
+            // read the resolved address of the feature flag in the target process
+            void* flagAddr = nullptr;
+            ReadMem(&GetData()->ProcAddress, &flagAddr, 4);
+
+            if (flagAddr)
+            {
+                BYTE const trueVal = 1;
+                PatchMem(flagAddr, &trueVal, 1);
+                Log::WriteLine(
+                    __FUNCTION__ ": Set feature flag '%s' in '%s' at 0x%08X",
+                    loop_FeatureFlags->symbol, loop_FeatureFlags->lib, flagAddr);
+            }
+            else
+            {
+                Log::WriteLine(
+                    __FUNCTION__ ": Feature flag '%s' not exported by '%s', skipping.",
+                    loop_FeatureFlags->symbol, loop_FeatureFlags->lib);
+            }
+
+            ++loop_FeatureFlags;
+
+            if (loop_FeatureFlags != v_FeatureFlags.end())
+            {
+                auto const& entry = *loop_FeatureFlags;
+                PatchMem(&GetData()->LibName, entry.lib, MaxNameLength);
+                PatchMem(&GetData()->ProcName, entry.symbol, MaxNameLength);
+
+                context.Eip = reinterpret_cast<DWORD>(&GetData()->LoadLibraryFunc);
+            }
+            else
+            {
+                Log::WriteLine(__FUNCTION__ ": Finished setting feature flags.");
+                bFeaturesSet = true;
 
                 context.Eip = reinterpret_cast<DWORD>(pcEntryPoint);
             }
@@ -505,6 +573,7 @@ void SyringeDebugger::Run(std::string_view const arguments)
     // breakpoints for DLL loading and proc address retrieving
     bDLLsLoaded = false;
     bHooksCreated = false;
+    bFeaturesSet = false;
     loop_LoadLibrary = v_AllHooks.end();
 
     // set breakpoint
@@ -779,6 +848,29 @@ void SyringeDebugger::FindDLLs()
     }
 
     Log::WriteLine(__FUNCTION__ ": Done (%d hooks added).", v_AllHooks.size());
+
+    // build feature flag entries for each unique DLL
+    v_FeatureFlags.clear();
+    {
+        std::set<std::string> uniqueLibs;
+        for (auto const& hook : v_AllHooks)
+        {
+            if (uniqueLibs.insert(hook->lib).second)
+            {
+                for (auto const& flagName : FeatureFlagNames)
+                {
+                    FeatureFlagEntry entry{};
+                    strncpy_s(entry.lib, hook->lib, MaxNameLength - 1);
+                    flagName.copy(entry.symbol, MaxNameLength - 1);
+                    v_FeatureFlags.push_back(entry);
+                }
+            }
+        }
+    }
+
+    Log::WriteLine(
+        __FUNCTION__ ": %d feature flag entries prepared.",
+        v_FeatureFlags.size());
     Log::WriteLine();
 }
 

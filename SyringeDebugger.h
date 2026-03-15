@@ -143,6 +143,22 @@ private:
     std::vector<Hook*> v_AllHooks;
     std::vector<Hook*>::iterator loop_LoadLibrary;
 
+    // feature flags
+    static constexpr std::string_view FeatureFlagNames[] = {
+        "ESPModification",
+        "ZFPreservation",
+    };
+
+    struct FeatureFlagEntry
+    {
+        char lib[MaxNameLength];
+        char symbol[MaxNameLength];
+    };
+
+    std::vector<FeatureFlagEntry> v_FeatureFlags;
+    std::vector<FeatureFlagEntry>::iterator loop_FeatureFlags;
+    bool bFeaturesSet{ false };
+
     // syringe
     std::string exe;
     std::vector<std::string> dlls{};
