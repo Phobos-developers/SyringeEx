@@ -332,6 +332,6 @@ declhook(hook, funcname, size)
 // feature flags, the values will remain false.
 namespace SyringeFeatures
 {
-    extern "C" __declspec(dllexport) __declspec(selectany) bool ESPModification = false;
-    extern "C" __declspec(dllexport) __declspec(selectany) bool ZFPreservation = false;
+    extern "C" __declspec(dllexport) inline bool ESPModification = false;
+    extern "C" __declspec(dllexport) inline bool ZFPreservation = false;
 }
