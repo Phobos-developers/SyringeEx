@@ -78,3 +78,46 @@ syringe.exe game.exe --nowait
 
 These options can be combined to precisely control debugger lifetime and process synchronization behavior.
 
+# Feature Flags API
+
+SyringeEx uses a feature flags system to signal capability support to injected DLLs. This allows DLLs to verify that the running Syringe version supports the features they depend on, enabling version-aware behavior and graceful fallbacks for older installations.
+
+Current closed-source version of Syringe is considered a baseline (SyringeEx has the features reimplemented, namely: multithreaded hook support, skipping handshakes that refuse Ares (Yuri's Revenge engine extension DLL) to load on Steam version of Yuri's Revenge). Everything beyond that must be declared as a feature flag, and DLLs that want to utilize the new features must check for the presence of required features before using them, and either refuse to load or provide fallback behavior if the features are not supported.
+
+## How It Works
+
+When a DLL is loaded, Syringe resolves exported boolean symbols from the `SyringeFeatures` namespace and sets them to `true` if the feature is supported. DLLs default these flags to `false`, so older Syringe versions that don't know about the flags will leave them unchanged.
+
+## Using Feature Flags in Your DLL
+
+```cpp
+#include <Syringe.h>
+
+void YourDLL::SomeLoadCode()
+{
+    if (SyringeFeatures::ZFPreservation)
+    {
+        // This Syringe version preserves the Zero Flag, so we can safely hook conditional instructions
+    }
+    else
+    {
+        // Fallback for older versions or bail out if this feature is critical
+    }
+}
+```
+
+## Current Feature Flags
+
+- `ESPModification` - Adds an ability for DLLs to modify the stack pointer (ESP) across hooks to be able to exit on addresses with a different stack depth than the hook entry point
+- `ZFPreservation` - Indicates that the Zero Flag (ZF) is preserved after hook execution, allowing to hook on conditional instructions
+
+## Adding New API Features
+
+All API enhancements beyond original Syringe must be declared as feature flags.
+
+To add a new feature:
+
+1. Add a new boolean to [`SyringeFeatures` namespace](include/Syringe.h)
+2. Add the symbol name to `FeatureFlagNames[]` in [`SyringeDebugger.h`](SyringeDebugger.h)
+3. Document the feature and its behavior in this README
+
