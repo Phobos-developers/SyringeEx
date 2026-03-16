@@ -188,13 +188,13 @@ DWORD SyringeDebugger::HandleException(DEBUG_EVENT const& dbgEvent)
                 BYTE const trueVal = 1;
                 PatchMem(flagAddr, &trueVal, 1);
                 Log::WriteLine(
-                    __FUNCTION__ ": Set feature flag '%s' in '%s' at 0x%08X",
+                    __FUNCTION__ ": Set feature flag \"%s\" in \"%s\" at 0x%08X",
                     loop_FeatureFlags->symbol, loop_FeatureFlags->lib, flagAddr);
             }
             else
             {
                 Log::WriteLine(
-                    __FUNCTION__ ": Feature flag '%s' not exported by '%s', skipping.",
+                    __FUNCTION__ ": Feature flag \"%s\" not exported by \"%s\", skipping.",
                     loop_FeatureFlags->symbol, loop_FeatureFlags->lib);
             }
 
