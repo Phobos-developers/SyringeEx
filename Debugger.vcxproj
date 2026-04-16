@@ -62,14 +62,13 @@
     </Midl>
     <ClCompile>
       <Optimization>Disabled</Optimization>
-      <AdditionalIncludeDirectories>$(ProjectDir)external\zydis\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-      <PreprocessorDefinitions>WIN32;_DEBUG;_CONSOLE;NOMINMAX;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>$(ProjectDir)external\include;$(ProjectDir)external\src\Zydis;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>WIN32;_DEBUG;_CONSOLE;NOMINMAX;ZYDIS_STATIC_BUILD;ZYCORE_STATIC_BUILD;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
       <PrecompiledHeaderOutputFile>.\Debug\Syringe.pch</PrecompiledHeaderOutputFile>
       <AssemblerListingLocation>$(IntDir)\%(RelativeDir)</AssemblerListingLocation>
       <ObjectFileName>$(IntDir)\%(RelativeDir)</ObjectFileName>
       <WarningLevel>Level4</WarningLevel>
-      <CallingConvention>StdCall</CallingConvention>
       <EnableEnhancedInstructionSet>StreamingSIMDExtensions</EnableEnhancedInstructionSet>
       <AdditionalOptions>/Zc:threadSafeInit- /Zc:throwingNew /Gw %(AdditionalOptions)</AdditionalOptions>
       <EnforceTypeConversionRules>true</EnforceTypeConversionRules>
@@ -95,8 +94,8 @@
       <TargetMachine>MachineX86</TargetMachine>
       <OptimizeReferences>true</OptimizeReferences>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
-      <AdditionalDependencies>kernel32.lib;user32.lib;gdi32.lib;winspool.lib;comdlg32.lib;advapi32.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;odbc32.lib;odbccp32.lib;comctl32.lib;dbghelp.lib;zydis.lib;%(AdditionalDependencies)</AdditionalDependencies>
-      <AdditionalLibraryDirectories>$(ProjectDir)external\zydis\lib\$(Configuration);%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>kernel32.lib;user32.lib;gdi32.lib;winspool.lib;comdlg32.lib;advapi32.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;odbc32.lib;odbccp32.lib;comctl32.lib;dbghelp.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalLibraryDirectories>%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
     </Link>
     <Bscmake>
       <SuppressStartupBanner>true</SuppressStartupBanner>
@@ -110,14 +109,13 @@
     </Midl>
     <ClCompile>
       <Optimization>Full</Optimization>
-      <PreprocessorDefinitions>WIN32;NDEBUG;_CONSOLE;NOMINMAX;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>WIN32;NDEBUG;_CONSOLE;NOMINMAX;ZYDIS_STATIC_BUILD;ZYCORE_STATIC_BUILD;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <StringPooling>true</StringPooling>
       <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
       <PrecompiledHeaderOutputFile>.\Release\Syringe.pch</PrecompiledHeaderOutputFile>
       <AssemblerListingLocation>$(IntDir)\%(RelativeDir)</AssemblerListingLocation>
       <ObjectFileName>$(IntDir)\%(RelativeDir)</ObjectFileName>
       <WarningLevel>Level4</WarningLevel>
-      <CallingConvention>StdCall</CallingConvention>
       <EnableEnhancedInstructionSet>StreamingSIMDExtensions</EnableEnhancedInstructionSet>
       <EnforceTypeConversionRules>true</EnforceTypeConversionRules>
       <AdditionalOptions>/Zc:threadSafeInit- /Zc:throwingNew /Gw %(AdditionalOptions)</AdditionalOptions>
@@ -125,7 +123,7 @@
       <LanguageStandard>stdcpp20</LanguageStandard>
       <BufferSecurityCheck>false</BufferSecurityCheck>
       <ConformanceMode>true</ConformanceMode>
-      <AdditionalIncludeDirectories>$(ProjectDir)external\zydis\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir)external\include;$(ProjectDir)external\src\Zydis;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <ResourceCompile>
       <PreprocessorDefinitions>NDEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
@@ -140,8 +138,8 @@
       <TargetMachine>MachineX86</TargetMachine>
       <OptimizeReferences>true</OptimizeReferences>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
-      <AdditionalDependencies>kernel32.lib;user32.lib;gdi32.lib;winspool.lib;comdlg32.lib;advapi32.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;odbc32.lib;odbccp32.lib;comctl32.lib;dbghelp.lib;zydis.lib;%(AdditionalDependencies)</AdditionalDependencies>
-      <AdditionalLibraryDirectories>$(ProjectDir)external\zydis\lib\$(Configuration);%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>kernel32.lib;user32.lib;gdi32.lib;winspool.lib;comdlg32.lib;advapi32.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;odbc32.lib;odbccp32.lib;comctl32.lib;dbghelp.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalLibraryDirectories>%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
     </Link>
     <Bscmake>
       <SuppressStartupBanner>true</SuppressStartupBanner>
@@ -150,6 +148,150 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="CRC32.cpp" />
+    <ClCompile Include="external\src\Zydis\Decoder.c">
+      <CompileAs>CompileAsC</CompileAs>
+      <CallingConvention>Cdecl</CallingConvention>
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+      <ConformanceMode>false</ConformanceMode>
+    </ClCompile>
+    <ClCompile Include="external\src\Zydis\DecoderData.c">
+      <CompileAs>CompileAsC</CompileAs>
+      <CallingConvention>Cdecl</CallingConvention>
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+      <ConformanceMode>false</ConformanceMode>
+    </ClCompile>
+    <ClCompile Include="external\src\Zydis\Disassembler.c">
+      <CompileAs>CompileAsC</CompileAs>
+      <CallingConvention>Cdecl</CallingConvention>
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+      <ConformanceMode>false</ConformanceMode>
+    </ClCompile>
+    <ClCompile Include="external\src\Zydis\Encoder.c">
+      <CompileAs>CompileAsC</CompileAs>
+      <CallingConvention>Cdecl</CallingConvention>
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+      <ConformanceMode>false</ConformanceMode>
+    </ClCompile>
+    <ClCompile Include="external\src\Zydis\EncoderData.c">
+      <CompileAs>CompileAsC</CompileAs>
+      <CallingConvention>Cdecl</CallingConvention>
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+      <ConformanceMode>false</ConformanceMode>
+    </ClCompile>
+    <ClCompile Include="external\src\Zydis\Formatter.c">
+      <CompileAs>CompileAsC</CompileAs>
+      <CallingConvention>Cdecl</CallingConvention>
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+      <ConformanceMode>false</ConformanceMode>
+    </ClCompile>
+    <ClCompile Include="external\src\Zydis\FormatterATT.c">
+      <CompileAs>CompileAsC</CompileAs>
+      <CallingConvention>Cdecl</CallingConvention>
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+      <ConformanceMode>false</ConformanceMode>
+    </ClCompile>
+    <ClCompile Include="external\src\Zydis\FormatterBase.c">
+      <CompileAs>CompileAsC</CompileAs>
+      <CallingConvention>Cdecl</CallingConvention>
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+      <ConformanceMode>false</ConformanceMode>
+    </ClCompile>
+    <ClCompile Include="external\src\Zydis\FormatterBuffer.c">
+      <CompileAs>CompileAsC</CompileAs>
+      <CallingConvention>Cdecl</CallingConvention>
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+      <ConformanceMode>false</ConformanceMode>
+    </ClCompile>
+    <ClCompile Include="external\src\Zydis\FormatterIntel.c">
+      <CompileAs>CompileAsC</CompileAs>
+      <CallingConvention>Cdecl</CallingConvention>
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+      <ConformanceMode>false</ConformanceMode>
+    </ClCompile>
+    <ClCompile Include="external\src\Zydis\MetaInfo.c">
+      <CompileAs>CompileAsC</CompileAs>
+      <CallingConvention>Cdecl</CallingConvention>
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+      <ConformanceMode>false</ConformanceMode>
+    </ClCompile>
+    <ClCompile Include="external\src\Zydis\Mnemonic.c">
+      <CompileAs>CompileAsC</CompileAs>
+      <CallingConvention>Cdecl</CallingConvention>
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+      <ConformanceMode>false</ConformanceMode>
+    </ClCompile>
+    <ClCompile Include="external\src\Zydis\Register.c">
+      <CompileAs>CompileAsC</CompileAs>
+      <CallingConvention>Cdecl</CallingConvention>
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+      <ConformanceMode>false</ConformanceMode>
+    </ClCompile>
+    <ClCompile Include="external\src\Zydis\Segment.c">
+      <CompileAs>CompileAsC</CompileAs>
+      <CallingConvention>Cdecl</CallingConvention>
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+      <ConformanceMode>false</ConformanceMode>
+    </ClCompile>
+    <ClCompile Include="external\src\Zydis\SharedData.c">
+      <CompileAs>CompileAsC</CompileAs>
+      <CallingConvention>Cdecl</CallingConvention>
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+      <ConformanceMode>false</ConformanceMode>
+    </ClCompile>
+    <ClCompile Include="external\src\Zydis\String.c">
+      <CompileAs>CompileAsC</CompileAs>
+      <CallingConvention>Cdecl</CallingConvention>
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+      <ConformanceMode>false</ConformanceMode>
+    </ClCompile>
+    <ClCompile Include="external\src\Zydis\Utils.c">
+      <CompileAs>CompileAsC</CompileAs>
+      <CallingConvention>Cdecl</CallingConvention>
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+      <ConformanceMode>false</ConformanceMode>
+    </ClCompile>
+    <ClCompile Include="external\src\Zydis\Zydis.c">
+      <CompileAs>CompileAsC</CompileAs>
+      <CallingConvention>Cdecl</CallingConvention>
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+      <ConformanceMode>false</ConformanceMode>
+    </ClCompile>
+    <ClCompile Include="external\src\Zycore\Allocator.c">
+      <CompileAs>CompileAsC</CompileAs>
+      <CallingConvention>Cdecl</CallingConvention>
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+      <ConformanceMode>false</ConformanceMode>
+    </ClCompile>
+    <ClCompile Include="external\src\Zycore\Format.c">
+      <CompileAs>CompileAsC</CompileAs>
+      <CallingConvention>Cdecl</CallingConvention>
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+      <ConformanceMode>false</ConformanceMode>
+    </ClCompile>
+    <ClCompile Include="external\src\Zycore\List.c">
+      <CompileAs>CompileAsC</CompileAs>
+      <CallingConvention>Cdecl</CallingConvention>
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+      <ConformanceMode>false</ConformanceMode>
+    </ClCompile>
+    <ClCompile Include="external\src\Zycore\String.c">
+      <CompileAs>CompileAsC</CompileAs>
+      <CallingConvention>Cdecl</CallingConvention>
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+      <ConformanceMode>false</ConformanceMode>
+    </ClCompile>
+    <ClCompile Include="external\src\Zycore\Vector.c">
+      <CompileAs>CompileAsC</CompileAs>
+      <CallingConvention>Cdecl</CallingConvention>
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+      <ConformanceMode>false</ConformanceMode>
+    </ClCompile>
+    <ClCompile Include="external\src\Zycore\Zycore.c">
+      <CompileAs>CompileAsC</CompileAs>
+      <CallingConvention>Cdecl</CallingConvention>
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+      <ConformanceMode>false</ConformanceMode>
+    </ClCompile>
     <ClCompile Include="Log.cpp" />
     <ClCompile Include="Main.cpp" />
     <ClCompile Include="PortableExecutable.cpp" />
@@ -157,6 +299,34 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="CRC32.h" />
+    <ClInclude Include="external\include\Zydis\Decoder.h" />
+    <ClInclude Include="external\include\Zydis\DecoderTypes.h" />
+    <ClInclude Include="external\include\Zydis\Defines.h" />
+    <ClInclude Include="external\include\Zydis\Disassembler.h" />
+    <ClInclude Include="external\include\Zydis\Encoder.h" />
+    <ClInclude Include="external\include\Zydis\Formatter.h" />
+    <ClInclude Include="external\include\Zydis\FormatterBuffer.h" />
+    <ClInclude Include="external\include\Zydis\Generated\EnumInstructionCategory.h" />
+    <ClInclude Include="external\include\Zydis\Generated\EnumISAExt.h" />
+    <ClInclude Include="external\include\Zydis\Generated\EnumISASet.h" />
+    <ClInclude Include="external\include\Zydis\Generated\EnumMnemonic.h" />
+    <ClInclude Include="external\include\Zydis\Generated\EnumRegister.h" />
+    <ClInclude Include="external\include\Zydis\Internal\DecoderData.h" />
+    <ClInclude Include="external\include\Zydis\Internal\EncoderData.h" />
+    <ClInclude Include="external\include\Zydis\Internal\FormatterATT.h" />
+    <ClInclude Include="external\include\Zydis\Internal\FormatterBase.h" />
+    <ClInclude Include="external\include\Zydis\Internal\FormatterIntel.h" />
+    <ClInclude Include="external\include\Zydis\Internal\SharedData.h" />
+    <ClInclude Include="external\include\Zydis\Internal\String.h" />
+    <ClInclude Include="external\include\Zydis\MetaInfo.h" />
+    <ClInclude Include="external\include\Zydis\Mnemonic.h" />
+    <ClInclude Include="external\include\Zydis\Register.h" />
+    <ClInclude Include="external\include\Zydis\Segment.h" />
+    <ClInclude Include="external\include\Zydis\SharedTypes.h" />
+    <ClInclude Include="external\include\Zydis\ShortString.h" />
+    <ClInclude Include="external\include\Zydis\Status.h" />
+    <ClInclude Include="external\include\Zydis\Utils.h" />
+    <ClInclude Include="external\include\Zydis\Zydis.h" />
     <ClInclude Include="FindFile.h" />
     <ClInclude Include="Handle.h" />
     <ClInclude Include="Log.h" />
@@ -173,6 +343,24 @@
   </ItemGroup>
   <ItemGroup>
     <Manifest Include="Syringe.exe.manifest" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="external\src\Zydis\Generated\AccessedFlags.inc" />
+    <None Include="external\src\Zydis\Generated\DecoderTables.inc" />
+    <None Include="external\src\Zydis\Generated\EncoderTables.inc" />
+    <None Include="external\src\Zydis\Generated\EnumInstructionCategory.inc" />
+    <None Include="external\src\Zydis\Generated\EnumISAExt.inc" />
+    <None Include="external\src\Zydis\Generated\EnumISASet.inc" />
+    <None Include="external\src\Zydis\Generated\EnumMnemonic.inc" />
+    <None Include="external\src\Zydis\Generated\EnumRegister.inc" />
+    <None Include="external\src\Zydis\Generated\FormatterStrings.inc" />
+    <None Include="external\src\Zydis\Generated\GetCcInfo.inc" />
+    <None Include="external\src\Zydis\Generated\GetRelInfo.inc" />
+    <None Include="external\src\Zydis\Generated\InstructionDefinitions.inc" />
+    <None Include="external\src\Zydis\Generated\InstructionEncodings.inc" />
+    <None Include="external\src\Zydis\Generated\OperandDefinitions.inc" />
+    <None Include="external\src\Zydis\Generated\RegisterClassLookup.inc" />
+    <None Include="external\src\Zydis\Generated\RegisterLookup.inc" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

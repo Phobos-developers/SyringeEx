@@ -78,6 +78,110 @@ DWORD __fastcall SyringeDebugger::RelativeOffset(void const* pFrom, void const* 
     return to - from;
 }
 
+std::vector<BYTE> SyringeDebugger::RebuildInstructions(
+    BYTE const* bytes, size_t size, DWORD originalAddr, DWORD newAddr)
+{
+    ZydisDecoder decoder;
+    ZydisDecoderInit(&decoder, ZYDIS_MACHINE_MODE_LONG_COMPAT_32, ZYDIS_STACK_WIDTH_32);
+
+    std::vector<BYTE> result;
+    result.reserve(size * 2);
+
+    size_t offset = 0;
+    while (offset < size)
+    {
+        ZydisDecodedInstruction instruction;
+        ZydisDecodedOperand operands[ZYDIS_MAX_OPERAND_COUNT];
+
+        auto const srcAddr = static_cast<ZyanU64>(originalAddr + offset);
+        auto const dstAddr = static_cast<ZyanU64>(newAddr + result.size());
+
+        if (ZYAN_FAILED(ZydisDecoderDecodeFull(
+                &decoder, bytes + offset, size - offset, &instruction, operands)))
+        {
+            Log::WriteLine(
+                __FUNCTION__ ": Failed to decode instruction at 0x%08X, "
+                "copying remaining %u bytes verbatim.",
+                static_cast<DWORD>(srcAddr), static_cast<unsigned>(size - offset));
+
+            result.insert(result.end(), bytes + offset, bytes + size);
+            break;
+        }
+
+        if (instruction.attributes & ZYDIS_ATTRIB_IS_RELATIVE)
+        {
+            ZydisEncoderRequest req;
+            if (ZYAN_FAILED(ZydisEncoderDecodedInstructionToEncoderRequest(
+                    &instruction, operands, instruction.operand_count_visible, &req)))
+            {
+                Log::WriteLine(
+                    __FUNCTION__ ": Failed to convert instruction at 0x%08X to "
+                    "encoder request, copying %u bytes verbatim.",
+                    static_cast<DWORD>(srcAddr), instruction.length);
+
+                result.insert(result.end(),
+                    bytes + offset, bytes + offset + instruction.length);
+                offset += instruction.length;
+                continue;
+            }
+
+            // Resolve relative operands to absolute addresses.
+            for (ZyanU8 i = 0; i < req.operand_count; ++i)
+            {
+                if (req.operands[i].type == ZYDIS_OPERAND_TYPE_IMMEDIATE)
+                {
+                    ZyanU64 absAddr;
+                    if (ZYAN_SUCCESS(ZydisCalcAbsoluteAddress(
+                            &instruction, &operands[i], srcAddr, &absAddr)))
+                    {
+                        req.operands[i].imm.u = absAddr;
+                    }
+                }
+                else if (req.operands[i].type == ZYDIS_OPERAND_TYPE_MEMORY)
+                {
+                    ZyanU64 absAddr;
+                    if (ZYAN_SUCCESS(ZydisCalcAbsoluteAddress(
+                            &instruction, &operands[i], srcAddr, &absAddr)))
+                    {
+                        req.operands[i].mem.displacement = static_cast<ZyanI64>(absAddr);
+                    }
+                }
+            }
+
+            // Let the encoder pick optimal branch width for the new location.
+            req.branch_width = ZYDIS_BRANCH_WIDTH_NONE;
+
+            BYTE encoded[ZYDIS_MAX_INSTRUCTION_LENGTH];
+            ZyanUSize encodedLen = sizeof(encoded);
+
+            if (ZYAN_FAILED(ZydisEncoderEncodeInstructionAbsolute(
+                    &req, encoded, &encodedLen, dstAddr)))
+            {
+                Log::WriteLine(
+                    __FUNCTION__ ": Failed to re-encode instruction at 0x%08X, "
+                    "copying %u bytes verbatim.",
+                    static_cast<DWORD>(srcAddr), instruction.length);
+
+                result.insert(result.end(),
+                    bytes + offset, bytes + offset + instruction.length);
+            }
+            else
+            {
+                result.insert(result.end(), encoded, encoded + encodedLen);
+            }
+        }
+        else
+        {
+            result.insert(result.end(),
+                bytes + offset, bytes + offset + instruction.length);
+        }
+
+        offset += instruction.length;
+    }
+
+    return result;
+}
+
 DWORD SyringeDebugger::HandleException(DEBUG_EVENT const& dbgEvent)
 {
     auto const exceptCode = dbgEvent.u.Exception.ExceptionRecord.ExceptionCode;
@@ -307,7 +411,15 @@ DWORD SyringeDebugger::HandleException(DEBUG_EVENT const& dbgEvent)
                         continue;
                     }
 
-                    auto const sz = count * sizeof(code_call) + sizeof(jmp_back) + overridden;
+                    // read the overridden bytes from the target process
+                    std::vector<BYTE> original_bytes(overridden);
+                    ReadMem(it.first, original_bytes.data(), overridden);
+
+                    // use a conservative upper bound for rebuilt instructions,
+                    // since relative instruction re-encoding may change sizes
+                    // (e.g. short branch -> near branch)
+                    auto const max_rebuilt = overridden * 3;
+                    auto const sz = count * sizeof(code_call) + sizeof(jmp_back) + max_rebuilt;
 
                     code.resize(sz);
                     auto p_code = code.data();
@@ -331,11 +443,18 @@ DWORD SyringeDebugger::HandleException(DEBUG_EVENT const& dbgEvent)
                         }
                     }
 
-                    // write overridden bytes
+                    // rebuild overridden bytes, adjusting relative addresses
                     if (overridden)
                     {
-                        ReadMem(it.first, p_code, overridden);
-                        p_code += overridden;
+                        auto const originalAddr = reinterpret_cast<DWORD>(it.first);
+                        auto const newAddr = reinterpret_cast<DWORD>(
+                            base + (p_code - code.data()));
+
+                        auto rebuilt = RebuildInstructions(
+                            original_bytes.data(), overridden, originalAddr, newAddr);
+
+                        std::memcpy(p_code, rebuilt.data(), rebuilt.size());
+                        p_code += rebuilt.size();
                     }
 
                     // write the jump back
@@ -344,8 +463,10 @@ DWORD SyringeDebugger::HandleException(DEBUG_EVENT const& dbgEvent)
                         static_cast<BYTE*>(it.first) + 0x05);
                     ApplyPatch(p_code, jmp_back);
                     ApplyPatch(p_code + 0x01, rel);
+                    p_code += sizeof(jmp_back);
 
-                    PatchMem(base, code.data(), code.size());
+                    auto const actual_sz = static_cast<size_t>(p_code - code.data());
+                    PatchMem(base, code.data(), actual_sz);
 
                     // dump
                     /*

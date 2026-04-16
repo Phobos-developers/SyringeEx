@@ -15,6 +15,13 @@
 
 #include <windows.h>
 
+#pragma warning(push, 0)
+#include <Zydis/Decoder.h>
+#include <Zydis/DecoderTypes.h>
+#include <Zydis/Encoder.h>
+#include <Zydis/Utils.h>
+#pragma warning(pop)
+
 using std::operator""sv;
 
 class SyringeDebugger
@@ -91,6 +98,7 @@ private:
 
     // helper Functions
     static DWORD __fastcall RelativeOffset(void const* from, void const* to);
+    static std::vector<BYTE> RebuildInstructions(BYTE const* bytes, size_t size, DWORD originalAddr, DWORD newAddr);
 
     template <typename T>
     static void ApplyPatch(void* ptr, T&& data) noexcept
