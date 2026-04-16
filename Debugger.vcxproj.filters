@@ -13,6 +13,18 @@
       <UniqueIdentifier>{e85625c5-48c3-4acf-a47a-873697970105}</UniqueIdentifier>
       <Extensions>ico;cur;bmp;dlg;rc2;rct;bin;rgs;gif;jpg;jpeg;jpe</Extensions>
     </Filter>
+    <Filter Include="Header Files\Zycore">
+      <UniqueIdentifier>{2b31a17f-0871-4fc3-96d1-3504b8cac09c}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Header Files\Zydis">
+      <UniqueIdentifier>{08120087-b7c9-4c60-9f3f-05b3483738cc}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files\Zycore">
+      <UniqueIdentifier>{c6d88644-8fad-469d-9674-1b252aa57a3f}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files\Zydis">
+      <UniqueIdentifier>{41f25040-993f-403c-9871-359593164e6b}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="CRC32.cpp">
@@ -29,6 +41,99 @@
     </ClCompile>
     <ClCompile Include="SyringeDebugger.cpp">
       <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="external\src\Zycore\Bitset.c">
+      <Filter>Source Files\Zycore</Filter>
+    </ClCompile>
+    <ClCompile Include="external\src\Zycore\Format.c">
+      <Filter>Source Files\Zycore</Filter>
+    </ClCompile>
+    <ClCompile Include="external\src\Zycore\List.c">
+      <Filter>Source Files\Zycore</Filter>
+    </ClCompile>
+    <ClCompile Include="external\src\Zycore\String.c">
+      <Filter>Source Files\Zycore</Filter>
+    </ClCompile>
+    <ClCompile Include="external\src\Zycore\Vector.c">
+      <Filter>Source Files\Zycore</Filter>
+    </ClCompile>
+    <ClCompile Include="external\src\Zycore\Zycore.c">
+      <Filter>Source Files\Zycore</Filter>
+    </ClCompile>
+    <ClCompile Include="external\src\Zycore\API\Memory.c">
+      <Filter>Source Files\Zycore</Filter>
+    </ClCompile>
+    <ClCompile Include="external\src\Zycore\API\Process.c">
+      <Filter>Source Files\Zycore</Filter>
+    </ClCompile>
+    <ClCompile Include="external\src\Zycore\API\Synchronization.c">
+      <Filter>Source Files\Zycore</Filter>
+    </ClCompile>
+    <ClCompile Include="external\src\Zycore\API\Terminal.c">
+      <Filter>Source Files\Zycore</Filter>
+    </ClCompile>
+    <ClCompile Include="external\src\Zycore\API\Thread.c">
+      <Filter>Source Files\Zycore</Filter>
+    </ClCompile>
+    <ClCompile Include="external\src\Zycore\Allocator.c">
+      <Filter>Source Files\Zycore</Filter>
+    </ClCompile>
+    <ClCompile Include="external\src\Zycore\ArgParse.c">
+      <Filter>Source Files\Zycore</Filter>
+    </ClCompile>
+    <ClCompile Include="external\src\Zydis\EncoderData.c">
+      <Filter>Source Files\Zydis</Filter>
+    </ClCompile>
+    <ClCompile Include="external\src\Zydis\Formatter.c">
+      <Filter>Source Files\Zydis</Filter>
+    </ClCompile>
+    <ClCompile Include="external\src\Zydis\FormatterATT.c">
+      <Filter>Source Files\Zydis</Filter>
+    </ClCompile>
+    <ClCompile Include="external\src\Zydis\FormatterBase.c">
+      <Filter>Source Files\Zydis</Filter>
+    </ClCompile>
+    <ClCompile Include="external\src\Zydis\FormatterBuffer.c">
+      <Filter>Source Files\Zydis</Filter>
+    </ClCompile>
+    <ClCompile Include="external\src\Zydis\FormatterIntel.c">
+      <Filter>Source Files\Zydis</Filter>
+    </ClCompile>
+    <ClCompile Include="external\src\Zydis\MetaInfo.c">
+      <Filter>Source Files\Zydis</Filter>
+    </ClCompile>
+    <ClCompile Include="external\src\Zydis\Mnemonic.c">
+      <Filter>Source Files\Zydis</Filter>
+    </ClCompile>
+    <ClCompile Include="external\src\Zydis\Register.c">
+      <Filter>Source Files\Zydis</Filter>
+    </ClCompile>
+    <ClCompile Include="external\src\Zydis\Segment.c">
+      <Filter>Source Files\Zydis</Filter>
+    </ClCompile>
+    <ClCompile Include="external\src\Zydis\SharedData.c">
+      <Filter>Source Files\Zydis</Filter>
+    </ClCompile>
+    <ClCompile Include="external\src\Zydis\String.c">
+      <Filter>Source Files\Zydis</Filter>
+    </ClCompile>
+    <ClCompile Include="external\src\Zydis\Utils.c">
+      <Filter>Source Files\Zydis</Filter>
+    </ClCompile>
+    <ClCompile Include="external\src\Zydis\Zydis.c">
+      <Filter>Source Files\Zydis</Filter>
+    </ClCompile>
+    <ClCompile Include="external\src\Zydis\Decoder.c">
+      <Filter>Source Files\Zydis</Filter>
+    </ClCompile>
+    <ClCompile Include="external\src\Zydis\DecoderData.c">
+      <Filter>Source Files\Zydis</Filter>
+    </ClCompile>
+    <ClCompile Include="external\src\Zydis\Disassembler.c">
+      <Filter>Source Files\Zydis</Filter>
+    </ClCompile>
+    <ClCompile Include="external\src\Zydis\Encoder.c">
+      <Filter>Source Files\Zydis</Filter>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
@@ -56,89 +161,155 @@
     <ClInclude Include="Support.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="..\zydis\include\Zydis\Decoder.h">
-      <Filter>Header Files</Filter>
+    <ClInclude Include="external\include\Zycore\Comparison.h">
+      <Filter>Header Files\Zycore</Filter>
     </ClInclude>
-    <ClInclude Include="..\zydis\include\Zydis\DecoderTypes.h">
-      <Filter>Header Files</Filter>
+    <ClInclude Include="external\include\Zycore\Defines.h">
+      <Filter>Header Files\Zycore</Filter>
     </ClInclude>
-    <ClInclude Include="..\zydis\include\Zydis\Defines.h">
-      <Filter>Header Files</Filter>
+    <ClInclude Include="external\include\Zycore\Format.h">
+      <Filter>Header Files\Zycore</Filter>
     </ClInclude>
-    <ClInclude Include="..\zydis\include\Zydis\Disassembler.h">
-      <Filter>Header Files</Filter>
+    <ClInclude Include="external\include\Zycore\LibC.h">
+      <Filter>Header Files\Zycore</Filter>
     </ClInclude>
-    <ClInclude Include="..\zydis\include\Zydis\Encoder.h">
-      <Filter>Header Files</Filter>
+    <ClInclude Include="external\include\Zycore\List.h">
+      <Filter>Header Files\Zycore</Filter>
     </ClInclude>
-    <ClInclude Include="..\zydis\include\Zydis\Formatter.h">
-      <Filter>Header Files</Filter>
+    <ClInclude Include="external\include\Zycore\Object.h">
+      <Filter>Header Files\Zycore</Filter>
     </ClInclude>
-    <ClInclude Include="..\zydis\include\Zydis\FormatterBuffer.h">
-      <Filter>Header Files</Filter>
+    <ClInclude Include="external\include\Zycore\Status.h">
+      <Filter>Header Files\Zycore</Filter>
     </ClInclude>
-    <ClInclude Include="..\zydis\include\Zydis\Generated\EnumInstructionCategory.h">
-      <Filter>Header Files</Filter>
+    <ClInclude Include="external\include\Zycore\String.h">
+      <Filter>Header Files\Zycore</Filter>
     </ClInclude>
-    <ClInclude Include="..\zydis\include\Zydis\Generated\EnumISAExt.h">
-      <Filter>Header Files</Filter>
+    <ClInclude Include="external\include\Zycore\Types.h">
+      <Filter>Header Files\Zycore</Filter>
     </ClInclude>
-    <ClInclude Include="..\zydis\include\Zydis\Generated\EnumISASet.h">
-      <Filter>Header Files</Filter>
+    <ClInclude Include="external\include\Zycore\Vector.h">
+      <Filter>Header Files\Zycore</Filter>
     </ClInclude>
-    <ClInclude Include="..\zydis\include\Zydis\Generated\EnumMnemonic.h">
-      <Filter>Header Files</Filter>
+    <ClInclude Include="external\include\Zycore\Zycore.h">
+      <Filter>Header Files\Zycore</Filter>
     </ClInclude>
-    <ClInclude Include="..\zydis\include\Zydis\Generated\EnumRegister.h">
-      <Filter>Header Files</Filter>
+    <ClInclude Include="external\include\Zycore\API\Memory.h">
+      <Filter>Header Files\Zycore</Filter>
     </ClInclude>
-    <ClInclude Include="..\zydis\include\Zydis\Internal\DecoderData.h">
-      <Filter>Header Files</Filter>
+    <ClInclude Include="external\include\Zycore\API\Process.h">
+      <Filter>Header Files\Zycore</Filter>
     </ClInclude>
-    <ClInclude Include="..\zydis\include\Zydis\Internal\EncoderData.h">
-      <Filter>Header Files</Filter>
+    <ClInclude Include="external\include\Zycore\API\Synchronization.h">
+      <Filter>Header Files\Zycore</Filter>
     </ClInclude>
-    <ClInclude Include="..\zydis\include\Zydis\Internal\FormatterATT.h">
-      <Filter>Header Files</Filter>
+    <ClInclude Include="external\include\Zycore\API\Terminal.h">
+      <Filter>Header Files\Zycore</Filter>
     </ClInclude>
-    <ClInclude Include="..\zydis\include\Zydis\Internal\FormatterBase.h">
-      <Filter>Header Files</Filter>
+    <ClInclude Include="external\include\Zycore\API\Thread.h">
+      <Filter>Header Files\Zycore</Filter>
     </ClInclude>
-    <ClInclude Include="..\zydis\include\Zydis\Internal\FormatterIntel.h">
-      <Filter>Header Files</Filter>
+    <ClInclude Include="external\include\Zycore\Internal\AtomicGNU.h">
+      <Filter>Header Files\Zycore</Filter>
     </ClInclude>
-    <ClInclude Include="..\zydis\include\Zydis\Internal\SharedData.h">
-      <Filter>Header Files</Filter>
+    <ClInclude Include="external\include\Zycore\Internal\AtomicMSVC.h">
+      <Filter>Header Files\Zycore</Filter>
     </ClInclude>
-    <ClInclude Include="..\zydis\include\Zydis\Internal\String.h">
-      <Filter>Header Files</Filter>
+    <ClInclude Include="external\include\Zycore\Allocator.h">
+      <Filter>Header Files\Zycore</Filter>
     </ClInclude>
-    <ClInclude Include="..\zydis\include\Zydis\MetaInfo.h">
-      <Filter>Header Files</Filter>
+    <ClInclude Include="external\include\Zycore\ArgParse.h">
+      <Filter>Header Files\Zycore</Filter>
     </ClInclude>
-    <ClInclude Include="..\zydis\include\Zydis\Mnemonic.h">
-      <Filter>Header Files</Filter>
+    <ClInclude Include="external\include\Zycore\Atomic.h">
+      <Filter>Header Files\Zycore</Filter>
     </ClInclude>
-    <ClInclude Include="..\zydis\include\Zydis\Register.h">
-      <Filter>Header Files</Filter>
+    <ClInclude Include="external\include\Zycore\Bitset.h">
+      <Filter>Header Files\Zycore</Filter>
     </ClInclude>
-    <ClInclude Include="..\zydis\include\Zydis\Segment.h">
-      <Filter>Header Files</Filter>
+    <ClInclude Include="external\include\Zydis\Formatter.h">
+      <Filter>Header Files\Zydis</Filter>
     </ClInclude>
-    <ClInclude Include="..\zydis\include\Zydis\SharedTypes.h">
-      <Filter>Header Files</Filter>
+    <ClInclude Include="external\include\Zydis\FormatterBuffer.h">
+      <Filter>Header Files\Zydis</Filter>
     </ClInclude>
-    <ClInclude Include="..\zydis\include\Zydis\ShortString.h">
-      <Filter>Header Files</Filter>
+    <ClInclude Include="external\include\Zydis\MetaInfo.h">
+      <Filter>Header Files\Zydis</Filter>
     </ClInclude>
-    <ClInclude Include="..\zydis\include\Zydis\Status.h">
-      <Filter>Header Files</Filter>
+    <ClInclude Include="external\include\Zydis\Mnemonic.h">
+      <Filter>Header Files\Zydis</Filter>
     </ClInclude>
-    <ClInclude Include="..\zydis\include\Zydis\Utils.h">
-      <Filter>Header Files</Filter>
+    <ClInclude Include="external\include\Zydis\Register.h">
+      <Filter>Header Files\Zydis</Filter>
     </ClInclude>
-    <ClInclude Include="..\zydis\include\Zydis\Zydis.h">
-      <Filter>Header Files</Filter>
+    <ClInclude Include="external\include\Zydis\Segment.h">
+      <Filter>Header Files\Zydis</Filter>
+    </ClInclude>
+    <ClInclude Include="external\include\Zydis\SharedTypes.h">
+      <Filter>Header Files\Zydis</Filter>
+    </ClInclude>
+    <ClInclude Include="external\include\Zydis\ShortString.h">
+      <Filter>Header Files\Zydis</Filter>
+    </ClInclude>
+    <ClInclude Include="external\include\Zydis\Status.h">
+      <Filter>Header Files\Zydis</Filter>
+    </ClInclude>
+    <ClInclude Include="external\include\Zydis\Utils.h">
+      <Filter>Header Files\Zydis</Filter>
+    </ClInclude>
+    <ClInclude Include="external\include\Zydis\Zydis.h">
+      <Filter>Header Files\Zydis</Filter>
+    </ClInclude>
+    <ClInclude Include="external\include\Zydis\Generated\EnumInstructionCategory.h">
+      <Filter>Header Files\Zydis</Filter>
+    </ClInclude>
+    <ClInclude Include="external\include\Zydis\Generated\EnumISAExt.h">
+      <Filter>Header Files\Zydis</Filter>
+    </ClInclude>
+    <ClInclude Include="external\include\Zydis\Generated\EnumISASet.h">
+      <Filter>Header Files\Zydis</Filter>
+    </ClInclude>
+    <ClInclude Include="external\include\Zydis\Generated\EnumMnemonic.h">
+      <Filter>Header Files\Zydis</Filter>
+    </ClInclude>
+    <ClInclude Include="external\include\Zydis\Generated\EnumRegister.h">
+      <Filter>Header Files\Zydis</Filter>
+    </ClInclude>
+    <ClInclude Include="external\include\Zydis\Internal\DecoderData.h">
+      <Filter>Header Files\Zydis</Filter>
+    </ClInclude>
+    <ClInclude Include="external\include\Zydis\Internal\EncoderData.h">
+      <Filter>Header Files\Zydis</Filter>
+    </ClInclude>
+    <ClInclude Include="external\include\Zydis\Internal\FormatterATT.h">
+      <Filter>Header Files\Zydis</Filter>
+    </ClInclude>
+    <ClInclude Include="external\include\Zydis\Internal\FormatterBase.h">
+      <Filter>Header Files\Zydis</Filter>
+    </ClInclude>
+    <ClInclude Include="external\include\Zydis\Internal\FormatterIntel.h">
+      <Filter>Header Files\Zydis</Filter>
+    </ClInclude>
+    <ClInclude Include="external\include\Zydis\Internal\SharedData.h">
+      <Filter>Header Files\Zydis</Filter>
+    </ClInclude>
+    <ClInclude Include="external\include\Zydis\Internal\String.h">
+      <Filter>Header Files\Zydis</Filter>
+    </ClInclude>
+    <ClInclude Include="external\include\Zydis\Decoder.h">
+      <Filter>Header Files\Zydis</Filter>
+    </ClInclude>
+    <ClInclude Include="external\include\Zydis\DecoderTypes.h">
+      <Filter>Header Files\Zydis</Filter>
+    </ClInclude>
+    <ClInclude Include="external\include\Zydis\Defines.h">
+      <Filter>Header Files\Zydis</Filter>
+    </ClInclude>
+    <ClInclude Include="external\include\Zydis\Disassembler.h">
+      <Filter>Header Files\Zydis</Filter>
+    </ClInclude>
+    <ClInclude Include="external\include\Zydis\Encoder.h">
+      <Filter>Header Files\Zydis</Filter>
     </ClInclude>
   </ItemGroup>
   <ItemGroup>
@@ -153,5 +324,55 @@
   </ItemGroup>
   <ItemGroup>
     <Manifest Include="Syringe.exe.manifest" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="external\src\Zydis\Generated\AccessedFlags.inc">
+      <Filter>Source Files\Zydis</Filter>
+    </None>
+    <None Include="external\src\Zydis\Generated\DecoderTables.inc">
+      <Filter>Source Files\Zydis</Filter>
+    </None>
+    <None Include="external\src\Zydis\Generated\EncoderTables.inc">
+      <Filter>Source Files\Zydis</Filter>
+    </None>
+    <None Include="external\src\Zydis\Generated\EnumInstructionCategory.inc">
+      <Filter>Source Files\Zydis</Filter>
+    </None>
+    <None Include="external\src\Zydis\Generated\EnumISAExt.inc">
+      <Filter>Source Files\Zydis</Filter>
+    </None>
+    <None Include="external\src\Zydis\Generated\EnumISASet.inc">
+      <Filter>Source Files\Zydis</Filter>
+    </None>
+    <None Include="external\src\Zydis\Generated\EnumMnemonic.inc">
+      <Filter>Source Files\Zydis</Filter>
+    </None>
+    <None Include="external\src\Zydis\Generated\EnumRegister.inc">
+      <Filter>Source Files\Zydis</Filter>
+    </None>
+    <None Include="external\src\Zydis\Generated\FormatterStrings.inc">
+      <Filter>Source Files\Zydis</Filter>
+    </None>
+    <None Include="external\src\Zydis\Generated\GetCcInfo.inc">
+      <Filter>Source Files\Zydis</Filter>
+    </None>
+    <None Include="external\src\Zydis\Generated\GetRelInfo.inc">
+      <Filter>Source Files\Zydis</Filter>
+    </None>
+    <None Include="external\src\Zydis\Generated\InstructionDefinitions.inc">
+      <Filter>Source Files\Zydis</Filter>
+    </None>
+    <None Include="external\src\Zydis\Generated\InstructionEncodings.inc">
+      <Filter>Source Files\Zydis</Filter>
+    </None>
+    <None Include="external\src\Zydis\Generated\OperandDefinitions.inc">
+      <Filter>Source Files\Zydis</Filter>
+    </None>
+    <None Include="external\src\Zydis\Generated\RegisterClassLookup.inc">
+      <Filter>Source Files\Zydis</Filter>
+    </None>
+    <None Include="external\src\Zydis\Generated\RegisterLookup.inc">
+      <Filter>Source Files\Zydis</Filter>
+    </None>
   </ItemGroup>
 </Project>
