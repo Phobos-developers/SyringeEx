@@ -162,6 +162,7 @@ private:
     static constexpr std::string_view FeatureFlagNames[] = {
         "ESPModification",
         "ZFPreservation",
+        "ReladdrInstructionFixup",
     };
 
     struct FeatureFlagEntry

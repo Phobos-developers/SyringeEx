@@ -110,6 +110,7 @@ void YourDLL::SomeLoadCode()
 
 - `ESPModification` - Adds an ability for DLLs to modify the stack pointer (ESP) across hooks to be able to exit on addresses with a different stack depth than the hook entry point
 - `ZFPreservation` - Indicates that the Zero Flag (ZF) is preserved after hook execution, allowing to hook on conditional instructions
+- `ReladdrInstructionFixup` - Indicates that relative address instructions (JMP, CALL, Jcc) in overwritten code are properly relocated when copied to trampolines, preventing crashes from stale offsets
 
 ## Adding New API Features
 

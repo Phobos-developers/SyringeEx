@@ -334,4 +334,5 @@ namespace SyringeFeatures
 {
     extern "C" __declspec(dllexport) inline bool ESPModification = false;
     extern "C" __declspec(dllexport) inline bool ZFPreservation = false;
+    extern "C" __declspec(dllexport) inline bool ReladdrInstructionFixup = false;
 }
