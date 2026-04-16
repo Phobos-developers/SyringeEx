@@ -148,7 +148,9 @@ std::vector<BYTE> SyringeDebugger::RebuildInstructions(
                 }
             }
 
-            // Let the encoder pick optimal branch width for the new location.
+            // Let the encoder pick optimal branch type and width for the new
+            // location (e.g. short jnz -> near jnz if displacement grows).
+            req.branch_type = ZYDIS_BRANCH_TYPE_NONE;
             req.branch_width = ZYDIS_BRANCH_WIDTH_NONE;
 
             BYTE encoded[ZYDIS_MAX_INSTRUCTION_LENGTH];
