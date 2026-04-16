@@ -114,8 +114,10 @@ std::vector<BYTE> SyringeDebugger::RebuildInstructions(
             {
                 Log::WriteLine(
                     __FUNCTION__ ": Failed to decode instruction at 0x%08X, "
-                    "copying remaining %u bytes verbatim.",
-                    static_cast<DWORD>(srcAddr), static_cast<unsigned>(size - offset));
+                    "copying remaining %u bytes verbatim. This could mean "
+                    "there is a faulty return 0 hook at 0x%08X.",
+                    static_cast<DWORD>(srcAddr), static_cast<unsigned>(size - offset),
+                    originalAddr);
 
                 tailOffset = offset;
                 break;
@@ -275,8 +277,10 @@ std::vector<BYTE> SyringeDebugger::RebuildInstructions(
         {
             Log::WriteLine(
                 __FUNCTION__ ": Failed to convert instruction at 0x%08X to "
-                "encoder request, copying %u bytes verbatim.",
-                static_cast<DWORD>(srcAddr), instruction.length);
+                "encoder request, copying %u bytes verbatim. This could "
+                "mean there is a faulty return 0 hook at 0x%08X.",
+                static_cast<DWORD>(srcAddr), instruction.length,
+                originalAddr);
 
             result.insert(result.end(),
                 bytes + info.srcOffset,
@@ -345,8 +349,10 @@ std::vector<BYTE> SyringeDebugger::RebuildInstructions(
         {
             Log::WriteLine(
                 __FUNCTION__ ": Failed to re-encode instruction at 0x%08X, "
-                "copying %u bytes verbatim.",
-                static_cast<DWORD>(srcAddr), instruction.length);
+                "copying %u bytes verbatim. This could mean there is a "
+                "faulty return 0 hook at 0x%08X.",
+                static_cast<DWORD>(srcAddr), instruction.length,
+                originalAddr);
 
             result.insert(result.end(),
                 bytes + info.srcOffset,
