@@ -62,7 +62,7 @@
     </Midl>
     <ClCompile>
       <Optimization>Disabled</Optimization>
-      <AdditionalIncludeDirectories>$(ProjectDir)external\include;$(ProjectDir)external\src\Zydis;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir)external\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <PreprocessorDefinitions>WIN32;_DEBUG;_CONSOLE;NOMINMAX;ZYDIS_STATIC_BUILD;ZYCORE_STATIC_BUILD;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
       <PrecompiledHeaderOutputFile>.\Debug\Syringe.pch</PrecompiledHeaderOutputFile>
@@ -123,7 +123,7 @@
       <LanguageStandard>stdcpp20</LanguageStandard>
       <BufferSecurityCheck>false</BufferSecurityCheck>
       <ConformanceMode>true</ConformanceMode>
-      <AdditionalIncludeDirectories>$(ProjectDir)external\include;$(ProjectDir)external\src\Zydis;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir)external\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <ResourceCompile>
       <PreprocessorDefinitions>NDEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
@@ -148,130 +148,6 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="CRC32.cpp" />
-    <ClCompile Include="external\src\Zycore\Allocator.c">
-      <ConformanceMode Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">false</ConformanceMode>
-      <ConformanceMode Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">false</ConformanceMode>
-    </ClCompile>
-    <ClCompile Include="external\src\Zycore\API\Memory.c">
-      <ConformanceMode Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">false</ConformanceMode>
-      <ConformanceMode Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">false</ConformanceMode>
-    </ClCompile>
-    <ClCompile Include="external\src\Zycore\API\Process.c">
-      <ConformanceMode Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">false</ConformanceMode>
-      <ConformanceMode Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">false</ConformanceMode>
-    </ClCompile>
-    <ClCompile Include="external\src\Zycore\API\Synchronization.c">
-      <ConformanceMode Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">false</ConformanceMode>
-      <ConformanceMode Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">false</ConformanceMode>
-    </ClCompile>
-    <ClCompile Include="external\src\Zycore\API\Terminal.c">
-      <ConformanceMode Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">false</ConformanceMode>
-      <ConformanceMode Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">false</ConformanceMode>
-    </ClCompile>
-    <ClCompile Include="external\src\Zycore\API\Thread.c">
-      <ConformanceMode Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">false</ConformanceMode>
-      <ConformanceMode Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">false</ConformanceMode>
-    </ClCompile>
-    <ClCompile Include="external\src\Zycore\ArgParse.c">
-      <ConformanceMode Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">false</ConformanceMode>
-      <ConformanceMode Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">false</ConformanceMode>
-    </ClCompile>
-    <ClCompile Include="external\src\Zycore\Bitset.c">
-      <ConformanceMode Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">false</ConformanceMode>
-      <ConformanceMode Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">false</ConformanceMode>
-    </ClCompile>
-    <ClCompile Include="external\src\Zycore\Format.c">
-      <ConformanceMode Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">false</ConformanceMode>
-      <ConformanceMode Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">false</ConformanceMode>
-    </ClCompile>
-    <ClCompile Include="external\src\Zycore\List.c">
-      <ConformanceMode Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">false</ConformanceMode>
-      <ConformanceMode Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">false</ConformanceMode>
-    </ClCompile>
-    <ClCompile Include="external\src\Zycore\String.c">
-      <ConformanceMode Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">false</ConformanceMode>
-      <ConformanceMode Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">false</ConformanceMode>
-    </ClCompile>
-    <ClCompile Include="external\src\Zycore\Vector.c">
-      <ConformanceMode Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">false</ConformanceMode>
-      <ConformanceMode Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">false</ConformanceMode>
-    </ClCompile>
-    <ClCompile Include="external\src\Zycore\Zycore.c">
-      <ConformanceMode Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">false</ConformanceMode>
-      <ConformanceMode Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">false</ConformanceMode>
-    </ClCompile>
-    <ClCompile Include="external\src\Zydis\Decoder.c">
-      <ConformanceMode Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">false</ConformanceMode>
-      <ConformanceMode Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">false</ConformanceMode>
-    </ClCompile>
-    <ClCompile Include="external\src\Zydis\DecoderData.c">
-      <ConformanceMode Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">false</ConformanceMode>
-      <ConformanceMode Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">false</ConformanceMode>
-    </ClCompile>
-    <ClCompile Include="external\src\Zydis\Disassembler.c">
-      <ConformanceMode Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">false</ConformanceMode>
-      <ConformanceMode Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">false</ConformanceMode>
-    </ClCompile>
-    <ClCompile Include="external\src\Zydis\Encoder.c">
-      <ConformanceMode Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">false</ConformanceMode>
-      <ConformanceMode Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">false</ConformanceMode>
-    </ClCompile>
-    <ClCompile Include="external\src\Zydis\EncoderData.c">
-      <ConformanceMode Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">false</ConformanceMode>
-      <ConformanceMode Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">false</ConformanceMode>
-    </ClCompile>
-    <ClCompile Include="external\src\Zydis\Formatter.c">
-      <ConformanceMode Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">false</ConformanceMode>
-      <ConformanceMode Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">false</ConformanceMode>
-    </ClCompile>
-    <ClCompile Include="external\src\Zydis\FormatterATT.c">
-      <ConformanceMode Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">false</ConformanceMode>
-      <ConformanceMode Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">false</ConformanceMode>
-    </ClCompile>
-    <ClCompile Include="external\src\Zydis\FormatterBase.c">
-      <ConformanceMode Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">false</ConformanceMode>
-      <ConformanceMode Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">false</ConformanceMode>
-    </ClCompile>
-    <ClCompile Include="external\src\Zydis\FormatterBuffer.c">
-      <ConformanceMode Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">false</ConformanceMode>
-      <ConformanceMode Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">false</ConformanceMode>
-    </ClCompile>
-    <ClCompile Include="external\src\Zydis\FormatterIntel.c">
-      <ConformanceMode Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">false</ConformanceMode>
-      <ConformanceMode Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">false</ConformanceMode>
-    </ClCompile>
-    <ClCompile Include="external\src\Zydis\MetaInfo.c">
-      <ConformanceMode Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">false</ConformanceMode>
-      <ConformanceMode Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">false</ConformanceMode>
-    </ClCompile>
-    <ClCompile Include="external\src\Zydis\Mnemonic.c">
-      <ConformanceMode Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">false</ConformanceMode>
-      <ConformanceMode Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">false</ConformanceMode>
-    </ClCompile>
-    <ClCompile Include="external\src\Zydis\Register.c">
-      <ConformanceMode Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">false</ConformanceMode>
-      <ConformanceMode Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">false</ConformanceMode>
-    </ClCompile>
-    <ClCompile Include="external\src\Zydis\Segment.c">
-      <ConformanceMode Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">false</ConformanceMode>
-      <ConformanceMode Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">false</ConformanceMode>
-    </ClCompile>
-    <ClCompile Include="external\src\Zydis\SharedData.c">
-      <ConformanceMode Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">false</ConformanceMode>
-      <ConformanceMode Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">false</ConformanceMode>
-    </ClCompile>
-    <ClCompile Include="external\src\Zydis\String.c">
-      <ConformanceMode Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">false</ConformanceMode>
-      <ConformanceMode Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">false</ConformanceMode>
-    </ClCompile>
-    <ClCompile Include="external\src\Zydis\Utils.c">
-      <ConformanceMode Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">false</ConformanceMode>
-      <ConformanceMode Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">false</ConformanceMode>
-    </ClCompile>
-    <ClCompile Include="external\src\Zydis\Zydis.c">
-      <ConformanceMode Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">false</ConformanceMode>
-      <ConformanceMode Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">false</ConformanceMode>
-    </ClCompile>
     <ClCompile Include="Log.cpp" />
     <ClCompile Include="Main.cpp" />
     <ClCompile Include="PortableExecutable.cpp" />
@@ -279,56 +155,6 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="CRC32.h" />
-    <ClInclude Include="external\include\Zycore\Allocator.h" />
-    <ClInclude Include="external\include\Zycore\API\Memory.h" />
-    <ClInclude Include="external\include\Zycore\API\Process.h" />
-    <ClInclude Include="external\include\Zycore\API\Synchronization.h" />
-    <ClInclude Include="external\include\Zycore\API\Terminal.h" />
-    <ClInclude Include="external\include\Zycore\API\Thread.h" />
-    <ClInclude Include="external\include\Zycore\ArgParse.h" />
-    <ClInclude Include="external\include\Zycore\Atomic.h" />
-    <ClInclude Include="external\include\Zycore\Bitset.h" />
-    <ClInclude Include="external\include\Zycore\Comparison.h" />
-    <ClInclude Include="external\include\Zycore\Defines.h" />
-    <ClInclude Include="external\include\Zycore\Format.h" />
-    <ClInclude Include="external\include\Zycore\Internal\AtomicGNU.h" />
-    <ClInclude Include="external\include\Zycore\Internal\AtomicMSVC.h" />
-    <ClInclude Include="external\include\Zycore\LibC.h" />
-    <ClInclude Include="external\include\Zycore\List.h" />
-    <ClInclude Include="external\include\Zycore\Object.h" />
-    <ClInclude Include="external\include\Zycore\Status.h" />
-    <ClInclude Include="external\include\Zycore\String.h" />
-    <ClInclude Include="external\include\Zycore\Types.h" />
-    <ClInclude Include="external\include\Zycore\Vector.h" />
-    <ClInclude Include="external\include\Zycore\Zycore.h" />
-    <ClInclude Include="external\include\Zydis\Decoder.h" />
-    <ClInclude Include="external\include\Zydis\DecoderTypes.h" />
-    <ClInclude Include="external\include\Zydis\Defines.h" />
-    <ClInclude Include="external\include\Zydis\Disassembler.h" />
-    <ClInclude Include="external\include\Zydis\Encoder.h" />
-    <ClInclude Include="external\include\Zydis\Formatter.h" />
-    <ClInclude Include="external\include\Zydis\FormatterBuffer.h" />
-    <ClInclude Include="external\include\Zydis\Generated\EnumInstructionCategory.h" />
-    <ClInclude Include="external\include\Zydis\Generated\EnumISAExt.h" />
-    <ClInclude Include="external\include\Zydis\Generated\EnumISASet.h" />
-    <ClInclude Include="external\include\Zydis\Generated\EnumMnemonic.h" />
-    <ClInclude Include="external\include\Zydis\Generated\EnumRegister.h" />
-    <ClInclude Include="external\include\Zydis\Internal\DecoderData.h" />
-    <ClInclude Include="external\include\Zydis\Internal\EncoderData.h" />
-    <ClInclude Include="external\include\Zydis\Internal\FormatterATT.h" />
-    <ClInclude Include="external\include\Zydis\Internal\FormatterBase.h" />
-    <ClInclude Include="external\include\Zydis\Internal\FormatterIntel.h" />
-    <ClInclude Include="external\include\Zydis\Internal\SharedData.h" />
-    <ClInclude Include="external\include\Zydis\Internal\String.h" />
-    <ClInclude Include="external\include\Zydis\MetaInfo.h" />
-    <ClInclude Include="external\include\Zydis\Mnemonic.h" />
-    <ClInclude Include="external\include\Zydis\Register.h" />
-    <ClInclude Include="external\include\Zydis\Segment.h" />
-    <ClInclude Include="external\include\Zydis\SharedTypes.h" />
-    <ClInclude Include="external\include\Zydis\ShortString.h" />
-    <ClInclude Include="external\include\Zydis\Status.h" />
-    <ClInclude Include="external\include\Zydis\Utils.h" />
-    <ClInclude Include="external\include\Zydis\Zydis.h" />
     <ClInclude Include="FindFile.h" />
     <ClInclude Include="Handle.h" />
     <ClInclude Include="Log.h" />
@@ -347,22 +173,9 @@
     <Manifest Include="Syringe.exe.manifest" />
   </ItemGroup>
   <ItemGroup>
-    <None Include="external\src\Zydis\Generated\AccessedFlags.inc" />
-    <None Include="external\src\Zydis\Generated\DecoderTables.inc" />
-    <None Include="external\src\Zydis\Generated\EncoderTables.inc" />
-    <None Include="external\src\Zydis\Generated\EnumInstructionCategory.inc" />
-    <None Include="external\src\Zydis\Generated\EnumISAExt.inc" />
-    <None Include="external\src\Zydis\Generated\EnumISASet.inc" />
-    <None Include="external\src\Zydis\Generated\EnumMnemonic.inc" />
-    <None Include="external\src\Zydis\Generated\EnumRegister.inc" />
-    <None Include="external\src\Zydis\Generated\FormatterStrings.inc" />
-    <None Include="external\src\Zydis\Generated\GetCcInfo.inc" />
-    <None Include="external\src\Zydis\Generated\GetRelInfo.inc" />
-    <None Include="external\src\Zydis\Generated\InstructionDefinitions.inc" />
-    <None Include="external\src\Zydis\Generated\InstructionEncodings.inc" />
-    <None Include="external\src\Zydis\Generated\OperandDefinitions.inc" />
-    <None Include="external\src\Zydis\Generated\RegisterClassLookup.inc" />
-    <None Include="external\src\Zydis\Generated\RegisterLookup.inc" />
+    <ProjectReference Include="external\Zydis.vcxproj">
+      <Project>{B2C3D4E5-2345-6789-ABCD-EF2345678901}</Project>
+    </ProjectReference>
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
