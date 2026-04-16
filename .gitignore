@@ -1,5 +1,7 @@
 Release/**
 Debug/**
+tests/obj/**
+tests/bin/**
 
 .vs/**
 .vscode/settings.json
