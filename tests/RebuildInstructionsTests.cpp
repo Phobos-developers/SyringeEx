@@ -360,6 +360,179 @@ TEST_CASE(various_short_jcc)
     }
 }
 
+// Intra-prologue forward JE: the branch target is another instruction within
+// the relocated prologue, not pointing back to the original (overwritten) code.
+TEST_CASE(intra_prologue_je_forward)
+{
+    // Prologue at 0x00401000 (10 bytes overridden):
+    //   0x00401000: 85 C0              TEST EAX, EAX        (2 bytes, offset 0)
+    //   0x00401002: 74 04              JE   0x00401008       (2 bytes, offset 2, target = offset 8)
+    //   0x00401004: 83 C4 08 90        ADD ESP,8; NOP        (4 bytes, offset 4)
+    //   0x00401008: 89 E5              MOV EBP, ESP          (2 bytes, offset 8) <- branch target
+    BYTE bytes[] = {
+        0x85, 0xC0,             // TEST EAX, EAX
+        0x74, 0x04,             // JE +4 (target = offset 8)
+        0x83, 0xC4, 0x08,       // ADD ESP, 8
+        0x90,                   // NOP
+        0x89, 0xE5              // MOV EBP, ESP
+    };
+    DWORD origAddr = 0x00401000;
+    DWORD newAddr  = 0x10000000; // far away
+
+    auto result = SyringeDebugger::RebuildInstructions(bytes, sizeof(bytes), origAddr, newAddr);
+
+    // Decode all instructions in the result to find the JE and MOV EBP, ESP.
+    ZydisDecoder dec;
+    ZydisDecoderInit(&dec, ZYDIS_MACHINE_MODE_LONG_COMPAT_32, ZYDIS_STACK_WIDTH_32);
+
+    // Find the JE instruction's target and the offset of MOV EBP, ESP in output.
+    size_t off = 0;
+    DWORD je_target = 0;
+    DWORD mov_addr = 0;
+    int instr_idx = 0;
+
+    while (off < result.size())
+    {
+        ZydisDecodedInstruction instr;
+        ZydisDecodedOperand ops[ZYDIS_MAX_OPERAND_COUNT];
+        if (ZYAN_FAILED(ZydisDecoderDecodeFull(
+                &dec, result.data() + off, result.size() - off, &instr, ops)))
+            break;
+
+        if (instr.mnemonic == ZYDIS_MNEMONIC_JZ)
+        {
+            decode_branch_target(result.data() + off, result.size() - off,
+                newAddr + static_cast<DWORD>(off), &je_target);
+        }
+        if (instr.mnemonic == ZYDIS_MNEMONIC_MOV && off > 0)
+        {
+            // This is the MOV EBP, ESP at the end
+            mov_addr = newAddr + static_cast<DWORD>(off);
+        }
+
+        off += instr.length;
+        ++instr_idx;
+    }
+
+    // The JE must target the relocated MOV EBP, ESP, NOT 0x00401008.
+    CHECK(je_target != 0);
+    CHECK(mov_addr != 0);
+    CHECK(je_target == mov_addr);
+    CHECK(je_target != 0x00401008); // must NOT point to original
+}
+
+// Intra-prologue backward JMP within the prologue.
+TEST_CASE(intra_prologue_jmp_backward)
+{
+    // Prologue at 0x00401000 (7 bytes overridden):
+    //   0x00401000: 90                 NOP                   (1 byte, offset 0)  <- branch target
+    //   0x00401001: 85 C0              TEST EAX, EAX         (2 bytes, offset 1)
+    //   0x00401003: 83 C4 08           ADD ESP, 8             (3 bytes, offset 3)
+    //   0x00401006: EB F8              JMP -8+2 = -6 => 0x00401000  (2 bytes, offset 6, target = offset 0)
+    BYTE bytes[] = {
+        0x90,                   // NOP
+        0x85, 0xC0,             // TEST EAX, EAX
+        0x83, 0xC4, 0x08,       // ADD ESP, 8
+        0xEB, 0xF8              // JMP -8 (target = offset 0)
+    };
+    DWORD origAddr = 0x00401000;
+    DWORD newAddr  = 0x20000000;
+
+    auto result = SyringeDebugger::RebuildInstructions(bytes, sizeof(bytes), origAddr, newAddr);
+
+    // The JMP should target newAddr + 0 (the NOP), not 0x00401000.
+    // Find the JMP instruction in the output.
+    ZydisDecoder dec;
+    ZydisDecoderInit(&dec, ZYDIS_MACHINE_MODE_LONG_COMPAT_32, ZYDIS_STACK_WIDTH_32);
+
+    size_t off = 0;
+    DWORD jmp_target = 0;
+    while (off < result.size())
+    {
+        ZydisDecodedInstruction instr;
+        ZydisDecodedOperand ops[ZYDIS_MAX_OPERAND_COUNT];
+        if (ZYAN_FAILED(ZydisDecoderDecodeFull(
+                &dec, result.data() + off, result.size() - off, &instr, ops)))
+            break;
+
+        if (instr.mnemonic == ZYDIS_MNEMONIC_JMP)
+        {
+            decode_branch_target(result.data() + off, result.size() - off,
+                newAddr + static_cast<DWORD>(off), &jmp_target);
+        }
+        off += instr.length;
+    }
+
+    CHECK(jmp_target == newAddr); // target is relocated offset 0
+    CHECK(jmp_target != origAddr);
+}
+
+// Mixed: one intra-prologue branch and one external call - both must resolve correctly.
+TEST_CASE(mixed_intra_and_external)
+{
+    // Prologue at 0x00401000 (12 bytes overridden):
+    //   0x00401000: E8 FB 0F 00 00     CALL 0x00402000       (5 bytes, offset 0, external)
+    //   0x00401005: 74 03              JE   0x0040100A        (2 bytes, offset 5, intra-prologue)
+    //   0x00401007: 83 C4 08           ADD ESP, 8             (3 bytes, offset 7)
+    //   0x0040100A: 89 E5              MOV EBP, ESP           (2 bytes, offset 10) <- branch target
+    BYTE bytes[] = {
+        0xE8, 0xFB, 0x0F, 0x00, 0x00,  // CALL 0x00402000
+        0x74, 0x03,                     // JE +3 (target = offset 10)
+        0x83, 0xC4, 0x08,               // ADD ESP, 8
+        0x89, 0xE5                      // MOV EBP, ESP
+    };
+    DWORD origAddr = 0x00401000;
+    DWORD newAddr  = 0x30000000;
+
+    auto result = SyringeDebugger::RebuildInstructions(bytes, sizeof(bytes), origAddr, newAddr);
+
+    // Decode all output instructions.
+    ZydisDecoder dec;
+    ZydisDecoderInit(&dec, ZYDIS_MACHINE_MODE_LONG_COMPAT_32, ZYDIS_STACK_WIDTH_32);
+
+    DWORD call_target = 0;
+    DWORD je_target = 0;
+    DWORD mov_addr = 0;
+    size_t off = 0;
+    int idx = 0;
+
+    while (off < result.size())
+    {
+        ZydisDecodedInstruction instr;
+        ZydisDecodedOperand ops[ZYDIS_MAX_OPERAND_COUNT];
+        if (ZYAN_FAILED(ZydisDecoderDecodeFull(
+                &dec, result.data() + off, result.size() - off, &instr, ops)))
+            break;
+
+        if (instr.mnemonic == ZYDIS_MNEMONIC_CALL)
+        {
+            decode_branch_target(result.data() + off, result.size() - off,
+                newAddr + static_cast<DWORD>(off), &call_target);
+        }
+        else if (instr.mnemonic == ZYDIS_MNEMONIC_JZ)
+        {
+            decode_branch_target(result.data() + off, result.size() - off,
+                newAddr + static_cast<DWORD>(off), &je_target);
+        }
+        else if (instr.mnemonic == ZYDIS_MNEMONIC_MOV && idx == 3)
+        {
+            mov_addr = newAddr + static_cast<DWORD>(off);
+        }
+
+        off += instr.length;
+        ++idx;
+    }
+
+    // External CALL must still target 0x00402000
+    CHECK(call_target == 0x00402000);
+
+    // Intra-prologue JE must target the relocated MOV, not 0x0040100A
+    CHECK(je_target != 0);
+    CHECK(mov_addr != 0);
+    CHECK(je_target == mov_addr);
+    CHECK(je_target != 0x0040100A);
+}
+
 // ---- entry point ----
 
 int main()

@@ -84,101 +84,284 @@ std::vector<BYTE> SyringeDebugger::RebuildInstructions(
     ZydisDecoder decoder;
     ZydisDecoderInit(&decoder, ZYDIS_MACHINE_MODE_LONG_COMPAT_32, ZYDIS_STACK_WIDTH_32);
 
+    // --- Pass 1: decode all instructions and classify relative branches ---
+
+    struct InstrInfo
+    {
+        size_t srcOffset;       // offset into original bytes
+        ZyanU8 srcLength;       // original instruction length
+        bool isRelative;        // has ZYDIS_ATTRIB_IS_RELATIVE
+        bool intraPrologue;     // relative branch targets within the prologue
+        ZyanU64 absTarget;      // resolved absolute target (for relative instrs)
+        size_t targetSrcOffset; // source offset of branch target (intra-prologue only)
+        size_t outputSize;      // size in the output buffer
+    };
+
+    std::vector<InstrInfo> infos;
+    size_t tailOffset = size; // offset of undecoded tail, if any
+
+    {
+        size_t offset = 0;
+        while (offset < size)
+        {
+            ZydisDecodedInstruction instruction;
+            ZydisDecodedOperand operands[ZYDIS_MAX_OPERAND_COUNT];
+
+            auto const srcAddr = static_cast<ZyanU64>(originalAddr + offset);
+
+            if (ZYAN_FAILED(ZydisDecoderDecodeFull(
+                    &decoder, bytes + offset, size - offset, &instruction, operands)))
+            {
+                Log::WriteLine(
+                    __FUNCTION__ ": Failed to decode instruction at 0x%08X, "
+                    "copying remaining %u bytes verbatim.",
+                    static_cast<DWORD>(srcAddr), static_cast<unsigned>(size - offset));
+
+                tailOffset = offset;
+                break;
+            }
+
+            InstrInfo info{};
+            info.srcOffset = offset;
+            info.srcLength = instruction.length;
+            info.isRelative = !!(instruction.attributes & ZYDIS_ATTRIB_IS_RELATIVE);
+            info.intraPrologue = false;
+            info.absTarget = 0;
+            info.targetSrcOffset = 0;
+
+            if (info.isRelative)
+            {
+                // Find the immediate operand and resolve its absolute target.
+                for (ZyanU8 i = 0; i < instruction.operand_count_visible; ++i)
+                {
+                    if (operands[i].type == ZYDIS_OPERAND_TYPE_IMMEDIATE)
+                    {
+                        ZyanU64 absAddr;
+                        if (ZYAN_SUCCESS(ZydisCalcAbsoluteAddress(
+                                &instruction, &operands[i], srcAddr, &absAddr)))
+                        {
+                            info.absTarget = absAddr;
+
+                            // Check if target falls within the prologue.
+                            if (absAddr >= originalAddr
+                                && absAddr < originalAddr + size)
+                            {
+                                info.intraPrologue = true;
+                                info.targetSrcOffset =
+                                    static_cast<size_t>(absAddr - originalAddr);
+                            }
+                        }
+                        break;
+                    }
+                }
+
+                if (info.intraPrologue)
+                {
+                    // Force near encoding so output size is deterministic:
+                    // 6 bytes for Jcc near (0F 8x rel32), 5 bytes for JMP/CALL (E9/E8 rel32).
+                    info.outputSize = (instruction.meta.category == ZYDIS_CATEGORY_COND_BR)
+                        ? 6u : 5u;
+                }
+                else
+                {
+                    // For external-relative instructions, do a trial re-encode
+                    // to determine the output size.
+                    ZydisEncoderRequest req;
+                    if (!ZYAN_FAILED(ZydisEncoderDecodedInstructionToEncoderRequest(
+                            &instruction, operands,
+                            instruction.operand_count_visible, &req)))
+                    {
+                        for (ZyanU8 i = 0; i < req.operand_count; ++i)
+                        {
+                            if (req.operands[i].type == ZYDIS_OPERAND_TYPE_IMMEDIATE)
+                            {
+                                ZyanU64 absAddr;
+                                if (ZYAN_SUCCESS(ZydisCalcAbsoluteAddress(
+                                        &instruction, &operands[i], srcAddr,
+                                        &absAddr)))
+                                {
+                                    req.operands[i].imm.u = absAddr;
+                                }
+                            }
+                            else if (req.operands[i].type == ZYDIS_OPERAND_TYPE_MEMORY)
+                            {
+                                ZyanU64 absAddr;
+                                if (ZYAN_SUCCESS(ZydisCalcAbsoluteAddress(
+                                        &instruction, &operands[i], srcAddr,
+                                        &absAddr)))
+                                {
+                                    req.operands[i].mem.displacement =
+                                        static_cast<ZyanI64>(absAddr);
+                                }
+                            }
+                        }
+
+                        req.branch_type = ZYDIS_BRANCH_TYPE_NONE;
+                        req.branch_width = ZYDIS_BRANCH_WIDTH_NONE;
+
+                        // Trial encode with a placeholder dstAddr; the final
+                        // address is close enough that the size won't change.
+                        BYTE tmp[ZYDIS_MAX_INSTRUCTION_LENGTH];
+                        ZyanUSize tmpLen = sizeof(tmp);
+                        if (!ZYAN_FAILED(ZydisEncoderEncodeInstructionAbsolute(
+                                &req, tmp, &tmpLen,
+                                static_cast<ZyanU64>(newAddr))))
+                        {
+                            info.outputSize = tmpLen;
+                        }
+                        else
+                        {
+                            info.outputSize = instruction.length;
+                        }
+                    }
+                    else
+                    {
+                        info.outputSize = instruction.length;
+                    }
+                }
+            }
+            else
+            {
+                info.outputSize = instruction.length;
+            }
+
+            infos.push_back(info);
+            offset += instruction.length;
+        }
+    }
+
+    // Build the output offset map: for each instruction index, its offset
+    // within the output buffer.
+    std::vector<size_t> outputOffsets(infos.size());
+    {
+        size_t outOff = 0;
+        for (size_t i = 0; i < infos.size(); ++i)
+        {
+            outputOffsets[i] = outOff;
+            outOff += infos[i].outputSize;
+        }
+    }
+
+    // --- Pass 2: emit relocated instructions ---
+
     std::vector<BYTE> result;
     result.reserve(size * 2);
 
-    size_t offset = 0;
-    while (offset < size)
+    for (size_t idx = 0; idx < infos.size(); ++idx)
     {
-        ZydisDecodedInstruction instruction;
-        ZydisDecodedOperand operands[ZYDIS_MAX_OPERAND_COUNT];
-
-        auto const srcAddr = static_cast<ZyanU64>(originalAddr + offset);
+        auto const& info = infos[idx];
+        auto const srcAddr = static_cast<ZyanU64>(originalAddr + info.srcOffset);
         auto const dstAddr = static_cast<ZyanU64>(newAddr + result.size());
 
-        if (ZYAN_FAILED(ZydisDecoderDecodeFull(
-                &decoder, bytes + offset, size - offset, &instruction, operands)))
+        if (!info.isRelative)
         {
-            Log::WriteLine(
-                __FUNCTION__ ": Failed to decode instruction at 0x%08X, "
-                "copying remaining %u bytes verbatim.",
-                static_cast<DWORD>(srcAddr), static_cast<unsigned>(size - offset));
-
-            result.insert(result.end(), bytes + offset, bytes + size);
-            break;
+            result.insert(result.end(),
+                bytes + info.srcOffset,
+                bytes + info.srcOffset + info.srcLength);
+            continue;
         }
 
-        if (instruction.attributes & ZYDIS_ATTRIB_IS_RELATIVE)
+        // Re-decode the instruction for encoding.
+        ZydisDecodedInstruction instruction;
+        ZydisDecodedOperand operands[ZYDIS_MAX_OPERAND_COUNT];
+        ZydisDecoderDecodeFull(
+            &decoder, bytes + info.srcOffset,
+            size - info.srcOffset, &instruction, operands);
+
+        ZydisEncoderRequest req;
+        if (ZYAN_FAILED(ZydisEncoderDecodedInstructionToEncoderRequest(
+                &instruction, operands,
+                instruction.operand_count_visible, &req)))
         {
-            ZydisEncoderRequest req;
-            if (ZYAN_FAILED(ZydisEncoderDecodedInstructionToEncoderRequest(
-                    &instruction, operands, instruction.operand_count_visible, &req)))
+            Log::WriteLine(
+                __FUNCTION__ ": Failed to convert instruction at 0x%08X to "
+                "encoder request, copying %u bytes verbatim.",
+                static_cast<DWORD>(srcAddr), instruction.length);
+
+            result.insert(result.end(),
+                bytes + info.srcOffset,
+                bytes + info.srcOffset + info.srcLength);
+            continue;
+        }
+
+        // Resolve relative operands to absolute addresses.
+        for (ZyanU8 i = 0; i < req.operand_count; ++i)
+        {
+            if (req.operands[i].type == ZYDIS_OPERAND_TYPE_IMMEDIATE)
             {
-                Log::WriteLine(
-                    __FUNCTION__ ": Failed to convert instruction at 0x%08X to "
-                    "encoder request, copying %u bytes verbatim.",
-                    static_cast<DWORD>(srcAddr), instruction.length);
-
-                result.insert(result.end(),
-                    bytes + offset, bytes + offset + instruction.length);
-                offset += instruction.length;
-                continue;
+                ZyanU64 absAddr;
+                if (ZYAN_SUCCESS(ZydisCalcAbsoluteAddress(
+                        &instruction, &operands[i], srcAddr, &absAddr)))
+                {
+                    if (info.intraPrologue)
+                    {
+                        // Map the target to its relocated output offset.
+                        // Find the instruction at the target source offset.
+                        for (size_t j = 0; j < infos.size(); ++j)
+                        {
+                            if (infos[j].srcOffset == info.targetSrcOffset)
+                            {
+                                absAddr = static_cast<ZyanU64>(
+                                    newAddr + outputOffsets[j]);
+                                break;
+                            }
+                        }
+                    }
+                    req.operands[i].imm.u = absAddr;
+                }
             }
-
-            // Resolve relative operands to absolute addresses.
-            for (ZyanU8 i = 0; i < req.operand_count; ++i)
+            else if (req.operands[i].type == ZYDIS_OPERAND_TYPE_MEMORY)
             {
-                if (req.operands[i].type == ZYDIS_OPERAND_TYPE_IMMEDIATE)
+                ZyanU64 absAddr;
+                if (ZYAN_SUCCESS(ZydisCalcAbsoluteAddress(
+                        &instruction, &operands[i], srcAddr, &absAddr)))
                 {
-                    ZyanU64 absAddr;
-                    if (ZYAN_SUCCESS(ZydisCalcAbsoluteAddress(
-                            &instruction, &operands[i], srcAddr, &absAddr)))
-                    {
-                        req.operands[i].imm.u = absAddr;
-                    }
-                }
-                else if (req.operands[i].type == ZYDIS_OPERAND_TYPE_MEMORY)
-                {
-                    ZyanU64 absAddr;
-                    if (ZYAN_SUCCESS(ZydisCalcAbsoluteAddress(
-                            &instruction, &operands[i], srcAddr, &absAddr)))
-                    {
-                        req.operands[i].mem.displacement = static_cast<ZyanI64>(absAddr);
-                    }
+                    req.operands[i].mem.displacement =
+                        static_cast<ZyanI64>(absAddr);
                 }
             }
+        }
 
+        if (info.intraPrologue)
+        {
+            // Force near encoding for intra-prologue branches so the output
+            // size matches what was predicted in pass 1.
+            req.branch_type = ZYDIS_BRANCH_TYPE_NEAR;
+            req.branch_width = ZYDIS_BRANCH_WIDTH_32;
+        }
+        else
+        {
             // Let the encoder pick optimal branch type and width for the new
             // location (e.g. short jnz -> near jnz if displacement grows).
             req.branch_type = ZYDIS_BRANCH_TYPE_NONE;
             req.branch_width = ZYDIS_BRANCH_WIDTH_NONE;
+        }
 
-            BYTE encoded[ZYDIS_MAX_INSTRUCTION_LENGTH];
-            ZyanUSize encodedLen = sizeof(encoded);
+        BYTE encoded[ZYDIS_MAX_INSTRUCTION_LENGTH];
+        ZyanUSize encodedLen = sizeof(encoded);
 
-            if (ZYAN_FAILED(ZydisEncoderEncodeInstructionAbsolute(
-                    &req, encoded, &encodedLen, dstAddr)))
-            {
-                Log::WriteLine(
-                    __FUNCTION__ ": Failed to re-encode instruction at 0x%08X, "
-                    "copying %u bytes verbatim.",
-                    static_cast<DWORD>(srcAddr), instruction.length);
+        if (ZYAN_FAILED(ZydisEncoderEncodeInstructionAbsolute(
+                &req, encoded, &encodedLen, dstAddr)))
+        {
+            Log::WriteLine(
+                __FUNCTION__ ": Failed to re-encode instruction at 0x%08X, "
+                "copying %u bytes verbatim.",
+                static_cast<DWORD>(srcAddr), instruction.length);
 
-                result.insert(result.end(),
-                    bytes + offset, bytes + offset + instruction.length);
-            }
-            else
-            {
-                result.insert(result.end(), encoded, encoded + encodedLen);
-            }
+            result.insert(result.end(),
+                bytes + info.srcOffset,
+                bytes + info.srcOffset + info.srcLength);
         }
         else
         {
-            result.insert(result.end(),
-                bytes + offset, bytes + offset + instruction.length);
+            result.insert(result.end(), encoded, encoded + encodedLen);
         }
+    }
 
-        offset += instruction.length;
+    // Append any undecoded tail bytes verbatim.
+    if (tailOffset < size)
+    {
+        result.insert(result.end(), bytes + tailOffset, bytes + size);
     }
 
     return result;
