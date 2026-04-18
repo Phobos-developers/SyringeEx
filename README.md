@@ -5,10 +5,12 @@ This fork extends and modernizes the original **Syringe** while maintaining comp
 
 # License
 
-The **entire program** is licensed under **LGPLv3**.  
+The **SyringeEx code in this repository** is licensed under **LGPLv3**.  
 See [`LICENSE`](LICENSE) for details.
 
 The file **[`Syringe.h`](Syringe.h)** is explicitly designated as an **API header**, and may be used under the LGPLv3 interface rules.
+
+This repository also vendors **[Zydis 5.0.0](https://zydis.re/)** and **[Zycore-C 1.5.2](https://github.com/zyantific/zycore-c)** under the **MIT License**.
 
 # Background
 
