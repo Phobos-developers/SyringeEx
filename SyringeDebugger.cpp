@@ -164,6 +164,23 @@ std::vector<BYTE> SyringeDebugger::RebuildInstructions(
 
             if (instruction.attributes & ZYDIS_ATTRIB_IS_RELATIVE)
             {
+                // Only Jcc, JMP, and CALL have near (rel32) forms.
+                // LOOP/LOOPE/LOOPNE/JCXZ/JECXZ/JRCXZ are rel8-only but
+                // Zydis classifies them as COND_BR, so we must exclude
+                // them by mnemonic.
+                auto const cat = instruction.meta.category;
+                auto const mn = instruction.mnemonic;
+                bool const hasNearForm =
+                    (cat == ZYDIS_CATEGORY_COND_BR
+                        || cat == ZYDIS_CATEGORY_UNCOND_BR
+                        || cat == ZYDIS_CATEGORY_CALL)
+                    && mn != ZYDIS_MNEMONIC_LOOP
+                    && mn != ZYDIS_MNEMONIC_LOOPE
+                    && mn != ZYDIS_MNEMONIC_LOOPNE
+                    && mn != ZYDIS_MNEMONIC_JCXZ
+                    && mn != ZYDIS_MNEMONIC_JECXZ
+                    && mn != ZYDIS_MNEMONIC_JRCXZ;
+
                 // Find the immediate operand and resolve its absolute target.
                 for (ZyanU8 i = 0; i < instruction.operand_count_visible; ++i)
                 {
@@ -177,9 +194,22 @@ std::vector<BYTE> SyringeDebugger::RebuildInstructions(
                             if (absAddr >= originalAddr
                                 && absAddr < originalAddr + size)
                             {
-                                info.intraPrologue = true;
-                                info.targetSrcOffset =
-                                    static_cast<size_t>(absAddr - originalAddr);
+                                if (hasNearForm)
+                                {
+                                    info.intraPrologue = true;
+                                    info.targetSrcOffset =
+                                        static_cast<size_t>(absAddr - originalAddr);
+                                }
+                                else
+                                {
+                                    Log::WriteLine(
+                                        __FUNCTION__ ": Relative instruction "
+                                        "at 0x%08X has an intra-prologue target "
+                                        "but no near encoding. Hook at 0x%08X "
+                                        "may not work correctly.",
+                                        static_cast<DWORD>(srcAddr),
+                                        originalAddr);
+                                }
                             }
                         }
                         break;
@@ -195,40 +225,21 @@ std::vector<BYTE> SyringeDebugger::RebuildInstructions(
                     ResolveRelativeOperands(
                         req, instruction, operands, srcAddr);
 
-                    if (info.intraPrologue)
+                    if (hasNearForm)
                     {
-                        // Force near encoding for intra-prologue branches so
-                        // the output size is deterministic.
+                        // Force near encoding so output size is deterministic
+                        // regardless of the final destination address.
                         req.branch_type = ZYDIS_BRANCH_TYPE_NEAR;
                         req.branch_width = ZYDIS_BRANCH_WIDTH_32;
                     }
-                    else
-                    {
-                        // Let the encoder pick optimal branch type and width
-                        // for the new location.
-                        req.branch_type = ZYDIS_BRANCH_TYPE_NONE;
-                        req.branch_width = ZYDIS_BRANCH_WIDTH_NONE;
-                    }
 
                     info.encoderReq = req;
-                }
 
-                if (info.intraPrologue)
-                {
-                    // 6 bytes for Jcc near (0F 8x rel32), 5 bytes for JMP/CALL (E9/E8 rel32).
-                    info.outputSize = (instruction.meta.category == ZYDIS_CATEGORY_COND_BR)
-                        ? 6u : 5u;
-                }
-                else if (info.encoderReq)
-                {
-                    // Trial re-encode to determine the output size.
-                    BYTE tmp[ZYDIS_MAX_INSTRUCTION_LENGTH];
-                    ZyanUSize tmpLen = sizeof(tmp);
-                    if (!ZYAN_FAILED(ZydisEncoderEncodeInstructionAbsolute(
-                            &req, tmp, &tmpLen,
-                            static_cast<ZyanU64>(newAddr))))
+                    if (hasNearForm)
                     {
-                        info.outputSize = tmpLen;
+                        // 6 bytes for Jcc near (0F 8x rel32), 5 bytes for JMP/CALL (E9/E8 rel32).
+                        info.outputSize = (instruction.meta.category == ZYDIS_CATEGORY_COND_BR)
+                            ? 6u : 5u;
                     }
                 }
             }

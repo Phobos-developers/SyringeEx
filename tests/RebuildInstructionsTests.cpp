@@ -533,6 +533,100 @@ TEST_CASE(mixed_intra_and_external)
     CHECK(je_target != 0x0040100A);
 }
 
+// LOOP (rel8-only) with an external target should be re-encoded without
+// forcing near, and the output size should match the original.
+TEST_CASE(loop_external_target)
+{
+    // At 0x00401000: E2 FE => LOOP $+0 (target = 0x00401000, self-loop)
+    // With only these 2 bytes as the prologue, the target equals origAddr
+    // which is within range, but since LOOP has no near form it should NOT
+    // be treated as intra-prologue. It should be re-encoded at srcLength.
+    BYTE bytes[] = { 0xE2, 0xFE };
+    DWORD origAddr = 0x00401000;
+    DWORD newAddr  = 0x00401010; // close enough for rel8 to still reach
+
+    auto result = SyringeDebugger::RebuildInstructions(bytes, sizeof(bytes), origAddr, newAddr);
+
+    CHECK(result.size() == 2);
+    CHECK(decode_mnemonic(result.data(), result.size()) == ZYDIS_MNEMONIC_LOOP);
+}
+
+// LOOP with an intra-prologue target should NOT be treated as intra-prologue
+// (no near form), and should not corrupt the offset map for later instructions.
+TEST_CASE(loop_intra_prologue_does_not_corrupt_offsets)
+{
+    // Prologue at 0x00401000 (6 bytes):
+    //   0x00401000: 90                 NOP            (1 byte, offset 0)
+    //   0x00401001: 90                 NOP            (1 byte, offset 1)
+    //   0x00401002: E2 FC              LOOP -4+2=-2 => 0x00401000 (2 bytes, offset 2, target = offset 0)
+    //   0x00401004: 89 E5              MOV EBP, ESP   (2 bytes, offset 4)
+    //
+    // The LOOP targets offset 0, which is inside the prologue, but since LOOP
+    // has no near form it must NOT be marked intraPrologue. The MOV after it
+    // should still be at the correct offset in the output.
+    BYTE bytes[] = {
+        0x90,                   // NOP
+        0x90,                   // NOP
+        0xE2, 0xFC,             // LOOP -4 (target = offset 0)
+        0x89, 0xE5              // MOV EBP, ESP
+    };
+    DWORD origAddr = 0x00401000;
+    DWORD newAddr  = 0x00401010; // close enough for LOOP rel8
+
+    auto result = SyringeDebugger::RebuildInstructions(bytes, sizeof(bytes), origAddr, newAddr);
+
+    // All instructions are non-remappable or non-relative, so output should
+    // be the same size as input (no expansion).
+    CHECK(result.size() == sizeof(bytes));
+
+    // Verify the MOV EBP, ESP is intact at the end.
+    CHECK(result[result.size() - 2] == 0x89);
+    CHECK(result[result.size() - 1] == 0xE5);
+}
+
+// JECXZ (rel8-only) should not be treated as intra-prologue.
+TEST_CASE(jecxz_intra_prologue_not_remapped)
+{
+    // Prologue at 0x00401000 (5 bytes):
+    //   0x00401000: 90                 NOP             (1 byte, offset 0)
+    //   0x00401001: E3 FD              JECXZ -3+2=-1 => 0x00401000 (2 bytes, offset 1, target = offset 0)
+    //   0x00401003: 89 E5              MOV EBP, ESP    (2 bytes, offset 3)
+    BYTE bytes[] = {
+        0x90,                   // NOP
+        0xE3, 0xFD,             // JECXZ -3 (target = offset 0)
+        0x89, 0xE5              // MOV EBP, ESP
+    };
+    DWORD origAddr = 0x00401000;
+    DWORD newAddr  = 0x00401010;
+
+    auto result = SyringeDebugger::RebuildInstructions(bytes, sizeof(bytes), origAddr, newAddr);
+
+    // No expansion should occur — JECXZ has no near form.
+    CHECK(result.size() == sizeof(bytes));
+
+    CHECK(decode_mnemonic(result.data() + 1, 2) == ZYDIS_MNEMONIC_JECXZ);
+}
+
+// All relative branches are forced to near encoding, so even a short JNZ
+// relocated to a nearby address should be emitted as near (6 bytes).
+TEST_CASE(short_jnz_forced_near)
+{
+    // 75 14 at 0x00401000, relocated nearby
+    BYTE bytes[] = { 0x75, 0x14 };
+    DWORD origAddr = 0x00401000;
+    DWORD newAddr  = 0x00401100;
+
+    auto result = SyringeDebugger::RebuildInstructions(bytes, sizeof(bytes), origAddr, newAddr);
+
+    // Must be 6 bytes (near JNZ), not 2 (short), because we force near.
+    CHECK(result.size() == 6);
+    CHECK(decode_mnemonic(result.data(), result.size()) == ZYDIS_MNEMONIC_JNZ);
+
+    DWORD target = 0;
+    CHECK(decode_branch_target(result.data(), result.size(), newAddr, &target));
+    CHECK(target == 0x00401016);
+}
+
 // ---- entry point ----
 
 int main()
