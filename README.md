@@ -30,10 +30,10 @@ syringe.exe game.exe
 
 ### Passing Arguments to the Target Executable
 
-Use `--args="..."` to provide arguments for the launched process:
+Use `--` as a delimiter to pass arguments to the launched process. All arguments after `--` will be forwarded directly to the target executable:
 
 ```
-syringe.exe game.exe --args="-CD. -SPAWN"
+syringe.exe game.exe -- -CD. -SPAWN
 ```
 
 ### DLL Injection Behavior

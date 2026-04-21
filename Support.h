@@ -28,8 +28,6 @@ inline auto trim(std::string_view string) noexcept
 
 inline auto parse_command_line(const std::vector<std::string>& arguments)
 {
-    static constexpr std::string_view ARGS_FLAG = "--args=";
-
     struct argument_set
     {
         std::vector<std::string> syringe_arguments;
@@ -45,6 +43,8 @@ inline auto parse_command_line(const std::vector<std::string>& arguments)
     // First non-flag argument becomes executable name
     bool exe_found = false;
 
+    bool exe_arguments = false;
+    
     for (const auto& arg : arguments)
     {
         // executable name: first argument not starting with '-'
@@ -55,21 +55,29 @@ inline auto parse_command_line(const std::vector<std::string>& arguments)
             continue;
         }
 
-        // game arguments: --args="blob"
-        if (arg.starts_with(ARGS_FLAG))
+        if (arg == "--")
         {
-            // extract after --args=
-            std::string blob = arg.substr(ARGS_FLAG.size());
-            ret.game_arguments = blob;
+            exe_arguments = true;
             continue;
         }
 
-        // Syringe arguments
-        ret.syringe_arguments.push_back(arg);
+        if (exe_arguments)
+        {
+            // game arguments
+            ret.game_arguments += " ";
+            ret.game_arguments += arg;
+        }
+        else
+        {
+            // Syringe arguments
+            ret.syringe_arguments.push_back(arg);
+        }
     }
 
     if (!exe_found || ret.executable_name.empty())
         throw invalid_command_arguments{};
+
+    ret.game_arguments = ret.game_arguments.substr(1);
 
     return ret;
 }
