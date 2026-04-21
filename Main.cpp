@@ -8,11 +8,61 @@
 #include <commctrl.h>
 #include <shellapi.h>
 
-std::vector<std::string> GetArguments()
+struct Arguments
 {
+    std::vector<std::string> syringe_args;
+    std::string game_args;
+};
+
+size_t FindSeparator(const std::wstring& cmdLine)
+{
+    bool inQuotes = false;
+    size_t len = cmdLine.length();
+    for (size_t i = 0; i < len; ++i)
+    {
+        if (cmdLine[i] == L'\\' && i + 1 < len && cmdLine[i + 1] == L'"')
+        {
+            i += 1;
+            continue;
+        }
+        
+        if (cmdLine[i] == L'"')
+        {
+            inQuotes = !inQuotes;
+            continue;
+        }
+        
+        if (!inQuotes && cmdLine[i] == L' ')
+        {
+            if (i + 3 < len && cmdLine[i + 1] == L'-' && cmdLine[i + 2] == L'-' && cmdLine[i + 3] == L' ')
+            {
+                return i;
+            }
+        }
+    }
+    return std::wstring::npos;
+}
+
+Arguments GetArguments()
+{
+    std::wstring wszSyringeArgs;
+    std::wstring wszGameArgs;
+    std::wstring lpCmdLine = GetCommandLineW();
+    auto separator = FindSeparator(lpCmdLine);
+    if (separator != std::wstring::npos)
+    {
+        wszSyringeArgs = lpCmdLine.substr(0, separator);
+        wszGameArgs = lpCmdLine.substr(separator + 4);
+    }
+    else
+    {
+        wszSyringeArgs = lpCmdLine;
+        wszGameArgs = L"";
+    }
+
     // Get argc, argv in wide chars
     int argc = 0;
-    LPWSTR* argvW = CommandLineToArgvW(GetCommandLineW(), &argc);
+    LPWSTR* argvW = CommandLineToArgvW(wszSyringeArgs.c_str(), &argc);
 
     // Convert to UTF-8. Skip the first argument as it contains the path to Syringe itself
     std::vector<std::string> argv(argc - 1);
@@ -25,10 +75,17 @@ std::vector<std::string> GetArguments()
 
     LocalFree(argvW);
 
-    return argv;
+    int len = WideCharToMultiByte(CP_UTF8, 0, wszGameArgs.c_str(), -1, nullptr, 0, nullptr, nullptr);
+    std::string gameArgs = std::string(len - 1, '\0');
+    WideCharToMultiByte(CP_UTF8, 0, wszGameArgs.c_str(), -1, gameArgs.data(), len, nullptr, nullptr);
+
+    return {
+        argv,
+        gameArgs,
+    };
 }
 
-int Run(const std::vector<std::string>& arguments)
+int Run(const Arguments& arguments)
 {
     constexpr auto const VersionString = "SyringeEx " SYRINGEEX_VER_TEXT ", based on Syringe 0.7.2.0";
 
@@ -39,14 +96,14 @@ int Run(const std::vector<std::string>& arguments)
     Log::WriteLine(VersionString);
     Log::WriteLine("===============");
     Log::WriteLine();
-    Log::WriteLine("WinMain: arguments = \"%.*s\"", printable(arguments));
+    Log::WriteLine("WinMain: arguments = \"%.*s\"", printable(arguments.syringe_args));
 
     auto failure = "Could not load executable.";
     auto exit_code = ERROR_ERRORS_ENCOUNTERED;
 
     try
     {
-        auto const command = parse_command_line(arguments);
+        auto const command = parse_command_line(arguments.syringe_args);
 
         Log::WriteLine(
             "WinMain: Trying to load executable file \"%.*s\"...",
@@ -62,10 +119,10 @@ int Run(const std::vector<std::string>& arguments)
 
         Log::WriteLine(
             "WinMain: SyringeDebugger::Run(\"%.*s\");",
-            printable(command.game_arguments));
+            printable(arguments.game_args));
         Log::WriteLine();
 
-        Debugger.Run(command.game_arguments);
+        Debugger.Run(arguments.game_args);
         Log::WriteLine("WinMain: SyringeDebugger::Run finished.");
         Log::WriteLine("WinMain: Exiting on success.");
         return ERROR_SUCCESS;
@@ -84,7 +141,7 @@ int Run(const std::vector<std::string>& arguments)
     {
         MessageBoxA(
             nullptr, "Syringe cannot be run like that.\n\n"
-            "Usage:\nSyringe.exe <exe name> [-i=<injectedfile.dll> ...] [-- <arguments>]",
+                     "Usage:\nSyringe.exe <exe name> [-i=<injectedfile.dll> ...] [-- <arguments>]",
             VersionString, MB_OK | MB_ICONINFORMATION);
 
         Log::WriteLine(

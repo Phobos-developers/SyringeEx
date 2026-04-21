@@ -32,7 +32,6 @@ inline auto parse_command_line(const std::vector<std::string>& arguments)
     {
         std::vector<std::string> syringe_arguments;
         std::string executable_name;
-        std::string game_arguments;
     };
 
     if (arguments.empty())
@@ -42,8 +41,6 @@ inline auto parse_command_line(const std::vector<std::string>& arguments)
 
     // First non-flag argument becomes executable name
     bool exe_found = false;
-
-    bool exe_arguments = false;
 
     for (const auto& arg : arguments)
     {
@@ -59,32 +56,16 @@ inline auto parse_command_line(const std::vector<std::string>& arguments)
             continue;
         }
 
-        if (arg == "--")
-        {
-            exe_arguments = true;
-            continue;
-        }
-
-        if (exe_arguments)
-        {
-            // game arguments
-            ret.game_arguments += " ";
-            ret.game_arguments += arg;
-        }
+        // Syringe arguments
+        if (arg.starts_with("-i=\"") && arg.ends_with('"'))
+            ret.syringe_arguments.push_back("-i=" + arg.substr(4, arg.length() - 5));
         else
-        {
-            // Syringe arguments
-            if (arg.starts_with("-i=\"") && arg.ends_with('"'))
-                ret.syringe_arguments.push_back("-i=" + arg.substr(4, arg.length() - 5));            
-            else 
-                ret.syringe_arguments.push_back(arg);
-        }
+            ret.syringe_arguments.push_back(arg);
     }
 
     if (!exe_found || ret.executable_name.empty())
         throw invalid_command_arguments{};
 
-    ret.game_arguments = ret.game_arguments.substr(1);
 
     return ret;
 }
