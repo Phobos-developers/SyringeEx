@@ -44,14 +44,18 @@ inline auto parse_command_line(const std::vector<std::string>& arguments)
     bool exe_found = false;
 
     bool exe_arguments = false;
-    
+
     for (const auto& arg : arguments)
     {
         // executable name: first argument not starting with '-'
         if (!exe_found && !arg.starts_with("-"))
         {
             exe_found = true;
-            ret.executable_name = arg;
+            if (arg.starts_with('"') && arg.ends_with('"'))
+                ret.executable_name = arg.substr(1, arg.length() - 2);
+            else
+                ret.executable_name = arg;
+
             continue;
         }
 
@@ -70,7 +74,10 @@ inline auto parse_command_line(const std::vector<std::string>& arguments)
         else
         {
             // Syringe arguments
-            ret.syringe_arguments.push_back(arg);
+            if (arg.starts_with("-i=\"") && arg.ends_with('"'))
+                ret.syringe_arguments.push_back("-i=" + arg.substr(4, arg.length() - 5));            
+            else 
+                ret.syringe_arguments.push_back(arg);
         }
     }
 
