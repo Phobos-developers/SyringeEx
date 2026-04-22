@@ -1,4 +1,4 @@
-#include "Log.h"
+﻿#include "Log.h"
 #include "SyringeDebugger.h"
 #include "Support.h"
 #include "resource.h"
@@ -14,32 +14,70 @@ struct Arguments
     std::string game_args;
 };
 
+// Find position of the separator token "--" (token-aware).
+// Returns the index of the whitespace BEFORE "--", or npos if not found.
+//
+// This implementation:
+// - Tracks quotes using correct Windows rules (backslash counting)
+// - Ensures "--" is a standalone token
+// - Avoids false matches inside quotes
 size_t FindSeparator(const std::wstring& cmdLine)
 {
     bool inQuotes = false;
-    size_t len = cmdLine.length();
+    const size_t len = cmdLine.length();
+
     for (size_t i = 0; i < len; ++i)
     {
-        if (cmdLine[i] == L'\\' && i + 1 < len && cmdLine[i + 1] == L'"')
-        {
-            i += 1;
-            continue;
-        }
-        
+        // ------------------------------------------------------------
+        // Handle quote with Windows backslash rules
+        // ------------------------------------------------------------
         if (cmdLine[i] == L'"')
         {
-            inQuotes = !inQuotes;
+            // Count consecutive backslashes before the quote
+            size_t backslashCount = 0;
+            for (size_t j = i; j > 0 && cmdLine[j - 1] == L'\\'; --j)
+            {
+                backslashCount++;
+            }
+
+            // Even => delimiter, Odd => escaped
+            if ((backslashCount % 2) == 0)
+            {
+                inQuotes = !inQuotes;
+            }
+
             continue;
         }
-        
-        if (!inQuotes && cmdLine[i] == L' ')
+
+        // ------------------------------------------------------------
+        // Only check for separator outside quotes
+        // ------------------------------------------------------------
+        if (!inQuotes && iswspace(cmdLine[i]))
         {
-            if (i + 3 < len && cmdLine[i + 1] == L'-' && cmdLine[i + 2] == L'-' && cmdLine[i + 3] == L' ')
+            // Skip whitespace to find next token start
+            size_t j = i;
+            while (j < len && iswspace(cmdLine[j]))
             {
-                return i;
+                j++;
+            }
+
+            // Check for "--"
+            if (j + 1 < len &&
+                cmdLine[j] == L'-' &&
+                cmdLine[j + 1] == L'-')
+            {
+                size_t k = j + 2;
+
+                // Ensure it's a standalone token:
+                // must end or be followed by whitespace
+                if (k == len || iswspace(cmdLine[k]))
+                {
+                    return i; // position before separator
+                }
             }
         }
     }
+
     return std::wstring::npos;
 }
 
