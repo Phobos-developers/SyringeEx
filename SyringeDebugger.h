@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 #define WIN32_LEAN_AND_MEAN
 //      WIN32_FAT_AND_STUPID
 
@@ -45,6 +45,10 @@ public:
         {
             std::string_view const flagView = flag;
 
+//Disable Warning C4456
+#pragma warning( push )
+#pragma warning( disable : 4456 )
+
             // parse all -i=filename_to_inject from flags
             if (auto const pos = flagView.find(INCLUDE_FLAG); pos != std::string_view::npos)
             {
@@ -67,6 +71,8 @@ public:
                 Log::WriteLine(__FUNCTION__ ": Unknown flag \"%.*s\", skipping.", printable(flagView));
             }
         }
+
+#pragma warning( pop )
 
         if (dlls.empty())
         {
