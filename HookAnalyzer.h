@@ -31,9 +31,10 @@ public:
 	std::unordered_map<std::string, std::unordered_map<int, std::vector<HookAnalyzeData>>> ByAddressEx;
 
 	void Add(HookAnalyzeData&& , bool Show);
-	bool Report();
+	bool ReportLOG(bool ByAddr, bool ByLib);
+	bool ReportNDJSON();//TODO
 	bool GenerateINJ();
-	bool HasHookConflict();
+	bool HasHookConflict(bool ShowHookConflictPopup);
 };
 
 //static constexpr size_t MaxNameLength = 0x100u;

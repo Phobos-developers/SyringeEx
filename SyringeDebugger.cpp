@@ -959,6 +959,25 @@ void SyringeDebugger::RealRun(std::string_view const arguments)
 
 void SyringeDebugger::PreLoadData()
 {
+    if (bReportLOG)
+    {
+        Log::WriteLine(__FUNCTION__ ": Writing Hook Analysis Report LOG……", v_AllHooks.size());
+        if(analyzer.ReportLOG(bReportLogByAddress, bReportLogByLibrary))Log::WriteLine(__FUNCTION__ ": Complete, see HookAnalysis.log 。", v_AllHooks.size());
+        else Log::WriteLine(__FUNCTION__ ": Failed to generate.", v_AllHooks.size());
+    }
+
+    if (bReportJSON)
+    {
+        Log::WriteLine(__FUNCTION__ ": Writing Hook Analysis Report JSON……", v_AllHooks.size());
+        if (analyzer.ReportNDJSON())Log::WriteLine(__FUNCTION__ ": Complete, see HookAnalysis.json 。", v_AllHooks.size());
+        else Log::WriteLine(__FUNCTION__ ": Failed to generate.", v_AllHooks.size());
+    }
+
+    if (bDetectConflict)
+    {
+        analyzer.HasHookConflict(bShowHookConflictPopup);
+    }
+
     if (bGenerateINJ)
     {
         Log::WriteLine(__FUNCTION__ ": Creating INJ files...");
