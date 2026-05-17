@@ -175,7 +175,7 @@ IMAGE_SECTION_HEADER const* PortableExecutable::FindSection(
 }
 
 
-std::unordered_map<std::string, DWORD> PortableExecutable::GetExportSymbols() noexcept
+std::unordered_map<std::string, DWORD> PortableExecutable::GetExportSymbols() const noexcept
 {
     std::unordered_map<std::string, DWORD> exportSymbols;
 

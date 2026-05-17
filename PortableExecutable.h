@@ -110,7 +110,7 @@ public:
     IMAGE_SECTION_HEADER const* FindSection(
         std::string_view name) const noexcept;
 
-    std::unordered_map<std::string, DWORD> PortableExecutable::GetExportSymbols() noexcept;
+    std::unordered_map<std::string, DWORD> GetExportSymbols() const noexcept;
 
 private:
     bool ReadFile();
