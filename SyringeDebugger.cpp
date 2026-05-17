@@ -962,8 +962,8 @@ void SyringeDebugger::PreLoadData()
     if (bReportLOG)
     {
         Log::WriteLine(__FUNCTION__ ": Writing Hook Analysis Report LOG……", v_AllHooks.size());
-        if(analyzer.ReportLOG(bReportLogByAddress, bReportLogByLibrary))Log::WriteLine(__FUNCTION__ ": Complete, see HookAnalysis.log 。", v_AllHooks.size());
-        else Log::WriteLine(__FUNCTION__ ": Failed to generate.", v_AllHooks.size());
+        if (!analyzer.ReportLOG(bReportLogByAddress, bReportLogByLibrary))
+            Log::WriteLine(__FUNCTION__ ": Failed to generate.", v_AllHooks.size());
     }
 
     if (bReportJSON)

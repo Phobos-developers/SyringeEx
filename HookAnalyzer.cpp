@@ -23,43 +23,39 @@ void HookAnalyzer::Add(HookAnalyzeData&& Data, bool Show)
 
 bool HookAnalyzer::ReportLOG(bool ByAddr, bool ByLib)
 {
-	constexpr auto const VersionString = "SyringeEx " SYRINGEEX_VER_TEXT ", based on Syringe 0.7.2.0";
-
-	FileHandle File = FileHandle(fopen("HookAnalysis.log", "w"));
-	if (!File)return false;
-	fprintf(File, "%s will analyze the specified hooks.\n", VersionString);
+	Log::WriteLine(__FUNCTION__ ": Hook Analysis ");
 	if (ByAddr)
 	{
-		fputs("========================\n", File);
-		fputs("By Hook Position: （Execution order for each address）\n", File);
+		Log::WriteLine("========================");
+		Log::WriteLine("By Hook Position: （Execution order for each address）");
 		for (auto& p : ByAddress)
 		{
-			fprintf(File, "At %08X : \n", p.first);
+			Log::WriteLine("At %08X : ", p.first);
 			for (auto v : p.second)
 			{
-				//fprintf(File, "Hook\"%s, Relative to\"%s\", From\"%s\", %d Bytes Overridden ,Priority %d, Sub Priority \"%s\"\n", v.Proc.c_str(), v.RelLib.c_str(), v.Lib.c_str(), v.Len, v.Priority, v.SubPriority.c_str());
-				fprintf(File, "Hook\"%s, From\"%s\", %d Bytes Overridden\n", v.Proc.c_str(), v.Lib.c_str(), v.Len);
+				//Log::WriteLine("Hook\"%s, Relative to\"%s\", From\"%s\", %d Bytes Overridden ,Priority %d, Sub Priority \"%s\"", v.Proc.c_str(), v.RelLib.c_str(), v.Lib.c_str(), v.Len, v.Priority, v.SubPriority.c_str());
+				Log::WriteLine("Hook\"%s, From\"%s\", %d Bytes Overridden", v.Proc.c_str(), v.Lib.c_str(), v.Len);
 			}
 		}
 	}
 
 	if (ByLib)
 	{
-		fputs("========================\n", File);
-		fputs("By Hook Source: \n", File);
+		Log::WriteLine("========================");
+		Log::WriteLine("By Hook Source: ");
 		for (auto& p : ByLibName)
 		{
-			fprintf(File, "Analyzing DLL : \"%s\" ……\n", p.first.c_str());
+			Log::WriteLine("Analyzing DLL : \"%s\" ……", p.first.c_str());
 			for (auto v : p.second)
 			{
-				//fprintf(File, "Hook\"%s, Relative to\"%s\", From\"%s\", %d Bytes Overridden ,Priority %d, Sub Priority \"%s\"\n", v.Proc.c_str(), v.RelLib.c_str(), v.Lib.c_str(), v.Len, v.Priority, v.SubPriority.c_str());
-				fprintf(File, "Hook\"%s, From\"%s\", %d Bytes Overridden\n", v.Proc.c_str(), v.Lib.c_str(), v.Len);
+				//Log::WriteLine("Hook\"%s, Relative to\"%s\", At 0x%08X, From\"%s\", %d Bytes Overridden ,Priority %d, Sub Priority \"%s\"", v.Proc.c_str(), v.RelLib.c_str(), v.Addr, v.Lib.c_str(), v.Len, v.Priority, v.SubPriority.c_str());
+				Log::WriteLine("Hook\"%s, At 0x%08X, From\"%s\", %d Bytes Overridden", v.Proc.c_str(), v.Addr, v.Lib.c_str(), v.Len);
 			}
 		}
 	}
 
-	fputs("========================\n", File);
-	fprintf(File, "%s : Complete.\n", VersionString);
+	Log::WriteLine("========================");
+	Log::WriteLine(__FUNCTION__ ": Complete. ");
 	return true;
 }
 
