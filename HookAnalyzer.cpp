@@ -70,6 +70,7 @@ bool HookAnalyzer::ReportNDJSON()
 	//A format may work : 
 	//every line :
 	//Hook Address / Name / Source / Bytes Overridden
+	return true;
 }
 
 bool HookAnalyzer::HasHookConflict(bool ShowHookConflictPopup)
@@ -99,10 +100,10 @@ bool HookAnalyzer::HasHookConflict(bool ShowHookConflictPopup)
 				Log::WriteLine("Hook Conflict Detected:");
 				for (auto& v : *SortedHooks[i])
 					//Log::WriteLine("Hook\"%s, Relative to\"%s\", From\"%s\", %d Bytes Overridden ,Priority %d, Sub Priority \"%s\"\n", v.Proc.c_str(), v.RelLib.c_str(), v.Lib.c_str(), v.Len, v.Priority, v.SubPriority.c_str());
-					Log::WriteLine("Hook\"%s, From\"%s\", %d Bytes Overridden\n", v.Proc.c_str(), v.Lib.c_str(), v.Len);
+					Log::WriteLine("Hook\"%s\", At 0x%08X, From\"%s\", %d Bytes Overridden\n", v.Proc.c_str(), v.Addr, v.Lib.c_str(), v.Len);
 				for (auto& v : *SortedHooks[i + 1])
 					//Log::WriteLine("Hook\"%s, Relative to\"%s\", From\"%s\", %d Bytes Overridden ,Priority %d, Sub Priority \"%s\"\n", v.Proc.c_str(), v.RelLib.c_str(), v.Lib.c_str(), v.Len, v.Priority, v.SubPriority.c_str());
-					Log::WriteLine("Hook\"%s, From\"%s\", %d Bytes Overridden\n", v.Proc.c_str(), v.Lib.c_str(), v.Len);
+					Log::WriteLine("Hook\"%s\", At 0x%08X, From\"%s\", %d Bytes Overridden\n", v.Proc.c_str(), v.Addr, v.Lib.c_str(), v.Len);
 				if (!Conflict && ShowHookConflictPopup)
 				{
 					wchar_t ErrorStr[1000];
