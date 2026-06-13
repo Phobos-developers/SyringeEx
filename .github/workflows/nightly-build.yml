@@ -1,0 +1,25 @@
+name: "Nightly Build"
+
+on:
+  push:
+    branches: [master, main, develop]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: windows-2022
+
+    strategy:
+      fail-fast: false
+      matrix:
+        configuration: [Debug, Release]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build
+        uses: ./.github/actions/build
+        with:
+          build-config: ${{ matrix.configuration }}
+          run-tests: ${{ matrix.configuration == 'Release' }}
+          artifact-name: Syringe-${{ matrix.configuration }}-${{ github.sha }}
