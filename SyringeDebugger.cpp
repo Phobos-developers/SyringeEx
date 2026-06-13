@@ -1061,7 +1061,7 @@ void SyringeDebugger::FindDLLs()
                 else
                 {
                     canLoad = ParseInjFileHooks(fn, buffer);
-                }
+                } 
 
                 if (canLoad)
                 {
