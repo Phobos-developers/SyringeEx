@@ -896,6 +896,7 @@ void SyringeDebugger::Run(std::string_view const arguments)
         if (dbgEvent.dwDebugEventCode == EXIT_PROCESS_DEBUG_EVENT)
         {
             exit_code = dbgEvent.u.ExitProcess.dwExitCode;
+            ContinueDebugEvent(dbgEvent.dwProcessId, dbgEvent.dwThreadId, continueStatus);
             break;
         }
         else if (dbgEvent.dwDebugEventCode == RIP_EVENT)
