@@ -56,26 +56,33 @@ When at least one `-i=` option is present, **only the specified DLLs** are injec
 
 ### Debugger Detach and Process Lifetime
 
-By default, Syringe detaches its debugger automatically once all hooks have been placed, allowing the target process to continue execution normally.
+By default, Syringe keeps its debugger attached after injection and exits once the target process terminates.
 
 This behavior can be modified using the following flags:
 
+- `--detach`  
+  Detaches the debugger automatically once all hooks have been placed, allowing the target process to continue execution without Syringe attached.
+
 - `--nodetach`  
-  Keeps the debugger attached after injection instead of detaching automatically.
+  Keeps the debugger attached after injection (default behavior, included for compatibility).
 
 - `--nowait`  
-  Causes Syringe to exit immediately after detaching, without waiting for the target process to terminate.
+  Causes Syringe to exit immediately after detaching (or immediately after the target process exits when attached), without waiting for the target process to terminate.
 
-By default (without `--nowait`), Syringe remains running after detaching and waits until the target process exits.
+By default (without `--nowait`), Syringe remains running and waits until the target process exits.
 
-Example:
-
-```
-syringe.exe game.exe --nodetach
-```
+Examples:
 
 ```
-syringe.exe game.exe --nowait
+syringe.exe game.exe
+```
+
+```
+syringe.exe game.exe --detach
+```
+
+```
+syringe.exe game.exe --detach --nowait
 ```
 
 These options can be combined to precisely control debugger lifetime and process synchronization behavior.
