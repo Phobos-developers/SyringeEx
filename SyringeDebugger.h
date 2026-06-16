@@ -33,6 +33,7 @@ class SyringeDebugger
     static constexpr BYTE NOP = 0x90;
 
     static constexpr std::string_view INCLUDE_FLAG = "-i=";
+    static constexpr std::string_view DETACH_FLAG = "--detach";
     static constexpr std::string_view NODETACH_FLAG = "--nodetach";
     static constexpr std::string_view NOWAIT_FLAG = "--nowait";
     static constexpr std::string_view HANDSHAKES_FLAG = "--handshakes";
@@ -49,6 +50,10 @@ public:
             if (auto const pos = flagView.find(INCLUDE_FLAG); pos != std::string_view::npos)
             {
                 dlls.emplace_back(flagView.begin() + pos + INCLUDE_FLAG.size(), flagView.end());
+            }
+            else if (auto const pos = flagView.find(DETACH_FLAG); pos != std::string_view::npos)
+            {
+                bDetachWhenDone = true;
             }
             else if (auto const pos = flagView.find(NODETACH_FLAG); pos != std::string_view::npos)
             {
@@ -186,7 +191,7 @@ private:
     DWORD dwExeSize{ 0u };
     DWORD dwExeCRC{ 0u };
 
-    bool bDetachWhenDone{ true };
+    bool bDetachWhenDone{ false };
     bool bWaitForProcessEnd{ true };
     bool bHandshakes{ false };
 
