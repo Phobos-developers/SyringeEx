@@ -45,7 +45,7 @@ BEGIN
             VALUE "FileDescription", "SyringeEx Main Executable"
             VALUE "FileVersion", SYRINGEEX_VER_TEXT
             VALUE "InternalName", "SyringeEx"
-            VALUE "LegalCopyright", "Copyright � 2008 - 2017 Patrick Dinklage, DCoder, and AlexB; Copyright � 2025 Phobos Developers"
+            VALUE "LegalCopyright", "Copyright � 2008 - 2017 Patrick Dinklage, DCoder, and AlexB; Copyright � 2025-2026 Phobos Developers"
             VALUE "OriginalFilename", "Syringe.exe"
             VALUE "ProductName", "Syringe"
             VALUE "ProductVersion", SYRINGEEX_VER_TEXT
