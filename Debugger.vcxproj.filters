@@ -13,6 +13,9 @@
       <UniqueIdentifier>{e85625c5-48c3-4acf-a47a-873697970105}</UniqueIdentifier>
       <Extensions>ico;cur;bmp;dlg;rc2;rct;bin;rgs;gif;jpg;jpeg;jpe</Extensions>
     </Filter>
+    <Filter Include="Components">
+      <UniqueIdentifier>{0a7cbdbd-6556-4c84-b288-4ffa95f8120b}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="CRC32.cpp">
@@ -29,6 +32,12 @@
     </ClCompile>
     <ClCompile Include="SyringeDebugger.cpp">
       <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="HookAnalyzer.cpp">
+      <Filter>Components</Filter>
+    </ClCompile>
+    <ClCompile Include="ToolFunctions.cpp">
+      <Filter>Components</Filter>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
@@ -55,6 +64,9 @@
     </ClInclude>
     <ClInclude Include="Support.h">
       <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="HookAnalyzer.h">
+      <Filter>Components</Filter>
     </ClInclude>
   </ItemGroup>
   <ItemGroup>

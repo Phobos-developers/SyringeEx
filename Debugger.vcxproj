@@ -148,15 +148,18 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="CRC32.cpp" />
+    <ClCompile Include="HookAnalyzer.cpp" />
     <ClCompile Include="Log.cpp" />
     <ClCompile Include="Main.cpp" />
     <ClCompile Include="PortableExecutable.cpp" />
     <ClCompile Include="SyringeDebugger.cpp" />
+    <ClCompile Include="ToolFunctions.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="CRC32.h" />
     <ClInclude Include="FindFile.h" />
     <ClInclude Include="Handle.h" />
+    <ClInclude Include="HookAnalyzer.h" />
     <ClInclude Include="Log.h" />
     <ClInclude Include="PortableExecutable.h" />
     <ClInclude Include="resource.h" />

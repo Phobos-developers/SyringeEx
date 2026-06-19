@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 #define WIN32_LEAN_AND_MEAN
 //      WIN32_FAT_AND_STUPID
 
@@ -22,6 +22,8 @@
 #include <Zydis/Utils.h>
 #pragma warning(pop)
 
+#include "HookAnalyzer.h"
+
 using std::operator""sv;
 
 class SyringeDebugger
@@ -37,6 +39,16 @@ class SyringeDebugger
     static constexpr std::string_view NODETACH_FLAG = "--nodetach";
     static constexpr std::string_view NOWAIT_FLAG = "--nowait";
     static constexpr std::string_view HANDSHAKES_FLAG = "--handshakes";
+	static constexpr std::string_view DRYRUN_FLAG = "--dryrun";
+    static constexpr std::string_view GENERATEINJ_FLAG = "--generate-inj";
+    static constexpr std::string_view REPORT_LOG_FLAG = "--report-log";
+    static constexpr std::string_view REPORT_JSON_FLAG = "--report-json";
+    static constexpr std::string_view SHOW_HOOK_CONFLICT_POPUP_FLAG = "--show-hook-conflict-popup";
+    static constexpr std::string_view NO_BY_ADDRESS_FLAG = "--no-by-address";
+    static constexpr std::string_view NO_BY_LIBRARY_FLAG = "--no-by-library";
+
+
+
 
 public:
     SyringeDebugger(std::string_view filename, std::vector<std::string> flags = {})
@@ -45,6 +57,10 @@ public:
         for (auto const& flag : flags)
         {
             std::string_view const flagView = flag;
+
+//Disable Warning C4456
+#pragma warning( push )
+#pragma warning( disable : 4456 )
 
             // parse all -i=filename_to_inject from flags
             if (auto const pos = flagView.find(INCLUDE_FLAG); pos != std::string_view::npos)
@@ -67,11 +83,41 @@ public:
             {
                 bHandshakes = true;
             }
+            else if (auto const pos = flagView.find(DRYRUN_FLAG); pos != std::string_view::npos)
+            {
+				bDryRun = true;
+            }
+            else if (auto const pos = flagView.find(GENERATEINJ_FLAG); pos != std::string_view::npos)
+            {
+                bGenerateINJ = true;
+			}
+            if (auto const pos = flagView.find(REPORT_LOG_FLAG); pos != std::string_view::npos)
+            {
+                bReportLOG = true;
+            }
+            else if (auto const pos = flagView.find(REPORT_JSON_FLAG); pos != std::string_view::npos)
+            {
+                bReportJSON = true;
+            }
+            else if (auto const pos = flagView.find(SHOW_HOOK_CONFLICT_POPUP_FLAG); pos != std::string_view::npos)
+            {
+                bShowHookConflictPopup = true;
+            }
+            else if (auto const pos = flagView.find(NO_BY_ADDRESS_FLAG); pos != std::string_view::npos)
+            {
+                bReportLogByAddress = false;
+            }
+            else if (auto const pos = flagView.find(NO_BY_LIBRARY_FLAG); pos != std::string_view::npos)
+            {
+                bReportLogByLibrary = false;
+            }
             else
             {
                 Log::WriteLine(__FUNCTION__ ": Unknown flag \"%.*s\", skipping.", printable(flagView));
             }
         }
+
+#pragma warning( pop )
 
         if (dlls.empty())
         {
@@ -82,6 +128,8 @@ public:
     }
 
     // debugger
+	void DryRun(std::string_view arguments);
+    void RealRun(std::string_view arguments);
     void Run(std::string_view arguments);
     DWORD HandleException(DEBUG_EVENT const& dbgEvent);
 
@@ -194,11 +242,23 @@ private:
     bool bDetachWhenDone{ false };
     bool bWaitForProcessEnd{ true };
     bool bHandshakes{ false };
+    bool bDryRun{ false };
+	bool bGenerateINJ{ false };
+    bool bReportLOG{ false };
+    bool bReportJSON{ false };
+    bool bDetectConflict{ true };
+    bool bShowHookConflictPopup{ false };
+    bool bReportLogByAddress{ true };
+    bool bReportLogByLibrary{ true };
+
 
     bool bDLLsLoaded{ false };
     bool bHooksCreated{ false };
 
     bool bAVLogged{ false };
+
+    // components
+	HookAnalyzer analyzer;
 
     // data addresses
     struct AllocData
@@ -249,6 +309,7 @@ private:
     bool CanHostDLL(PortableExecutable const& DLL, IMAGE_SECTION_HEADER const& hosts) const;
     bool ParseHooksSection(PortableExecutable const& DLL, IMAGE_SECTION_HEADER const& hooks, HookBuffer& buffer);
     std::optional<bool> Handshake(char const* lib, int hooks, unsigned int crc);
+    void PreLoadData();
 };
 
 // disable "structures padded due to alignment specifier"
