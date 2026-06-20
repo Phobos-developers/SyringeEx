@@ -1,9 +1,10 @@
-#include "Log.h"
+﻿#include "Log.h"
 
 #include <share.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <time.h>
+#include <chrono>
 
 FileHandle Log::File;
 
@@ -33,7 +34,10 @@ void Log::WriteTimestamp() noexcept
         tm t;
         localtime_s(&t, &raw);
 
-        fprintf(File, "[%02d:%02d:%02d] ", t.tm_hour, t.tm_min, t.tm_sec);
+        auto now = std::chrono::system_clock::now();
+        auto millis = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()) % 1000;
+        int imilli = (int)millis.count();
+        fprintf(File, "[%02d:%02d:%02d:%03d] ", t.tm_hour, t.tm_min, t.tm_sec, imilli);
     }
 }
 
