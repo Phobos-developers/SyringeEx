@@ -1,4 +1,4 @@
-#include "SyringeDebugger.h"
+﻿#include "SyringeDebugger.h"
 
 #include "CRC32.h"
 #include "FindFile.h"
@@ -1055,6 +1055,10 @@ void SyringeDebugger::FindDLLs()
                 PortableExecutable const DLL{ fn };
                 HookBuffer buffer;
 
+                auto AlwaysLoad = false;
+                auto Export = DLL.GetExportSymbols();
+                if (Export.count("SyringeForceLoad"))AlwaysLoad = true;
+
                 auto canLoad = false;
                 if (auto const hooks = DLL.FindSection(".syhks00"))
                 {
@@ -1064,6 +1068,8 @@ void SyringeDebugger::FindDLLs()
                 {
                     canLoad = ParseInjFileHooks(fn, buffer);
                 }
+
+                if (AlwaysLoad)canLoad = true;
 
                 if (canLoad)
                 {
