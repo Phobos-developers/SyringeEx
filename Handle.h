@@ -176,7 +176,7 @@ struct VirtualMemoryHandle
     {
         if (process && size)
         {
-            this->Value = VirtualAllocEx(process, address, size, MEM_RESERVE | MEM_COMMIT, PAGE_EXECUTE_READWRITE);
+            this->Value = VirtualAllocEx(process, address, size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
         }
     }
 
@@ -215,6 +215,19 @@ struct VirtualMemoryHandle
     BYTE* get() const noexcept
     {
         return static_cast<BYTE*>(this->Value);
+    }
+
+    bool protect(SIZE_T size, DWORD protection) const noexcept
+    {
+        DWORD oldProtection;
+        return this->Value && this->Process
+            && VirtualProtectEx(this->Process, this->Value, size, protection, &oldProtection) != FALSE;
+    }
+
+    bool flush_instruction_cache(SIZE_T size) const noexcept
+    {
+        return this->Value && this->Process
+            && FlushInstructionCache(this->Process, this->Value, size) != FALSE;
     }
 
     void clear() noexcept

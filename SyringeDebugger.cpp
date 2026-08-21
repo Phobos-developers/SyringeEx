@@ -57,6 +57,15 @@ VirtualMemoryHandle SyringeDebugger::AllocMem(void* address, size_t size)
     throw_lasterror_or(ERROR_ERRORS_ENCOUNTERED, exe);
 }
 
+void SyringeDebugger::MakeExecutable(VirtualMemoryHandle const& memory, size_t size)
+{
+    if (!memory.protect(size, PAGE_EXECUTE_READ)
+        || !memory.flush_instruction_cache(size))
+    {
+        throw_lasterror_or(ERROR_ERRORS_ENCOUNTERED, exe);
+    }
+}
+
 bool SyringeDebugger::SetBP(void* address)
 {
     // save overwritten code and set INT 3
@@ -610,7 +619,11 @@ DWORD SyringeDebugger::HandleException(DEBUG_EVENT const& dbgEvent)
                     p_code += sizeof(jmp_back);
 
                     auto const actual_sz = static_cast<size_t>(p_code - code.data());
-                    PatchMem(base, code.data(), actual_sz);
+                    if (!PatchMem(base, code.data(), actual_sz))
+                    {
+                        throw_lasterror_or(ERROR_ERRORS_ENCOUNTERED, exe);
+                    }
+                    MakeExecutable(it.second.p_caller_code, sz);
 
                     // dump
                     /*
@@ -831,7 +844,11 @@ void SyringeDebugger::Run(std::string_view const arguments)
     ApplyPatch(data.data() + 0x13, &GetData()->ProcName);
     ApplyPatch(data.data() + 0x1A, pImGetProcAddress);
     ApplyPatch(data.data() + 0x1F, &GetData()->ProcAddress);
-    PatchMem(pAlloc, data.data(), data.size());
+    if (!PatchMem(pAlloc, data.data(), data.size()))
+    {
+        throw_lasterror_or(ERROR_ERRORS_ENCOUNTERED, exe);
+    }
+    MakeExecutable(pAlloc, AllocData::CodeSize);
 
     Log::WriteLine(__FUNCTION__ ": pcLoadLibrary = 0x%08X", &GetData()->LoadLibraryFunc);
 
