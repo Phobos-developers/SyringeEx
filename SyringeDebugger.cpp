@@ -18,81 +18,10 @@
 
 using namespace std;
 
-namespace
-{
-bool IsRunningUnderWine()
-{
-    auto const ntdll = GetModuleHandleW(L"ntdll.dll");
-    return ntdll && GetProcAddress(ntdll, "wine_get_version");
-}
-
-class ProcThreadAttributeList
-{
-public:
-    explicit ProcThreadAttributeList(DWORD const attributeCount)
-    {
-        SIZE_T size = 0;
-        InitializeProcThreadAttributeList(nullptr, attributeCount, 0, &size);
-        if (size == 0)
-        {
-            throw_lasterror_or(ERROR_ERRORS_ENCOUNTERED, "process attribute list");
-        }
-
-        storage.resize(size);
-        auto const candidate = reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(storage.data());
-        if (!InitializeProcThreadAttributeList(candidate, attributeCount, 0, &size))
-        {
-            throw_lasterror_or(ERROR_ERRORS_ENCOUNTERED, "process attribute list");
-        }
-
-        value = candidate;
-    }
-
-    ProcThreadAttributeList(ProcThreadAttributeList const&) = delete;
-    ProcThreadAttributeList& operator=(ProcThreadAttributeList const&) = delete;
-
-    ~ProcThreadAttributeList()
-    {
-        if (value)
-        {
-            DeleteProcThreadAttributeList(value);
-        }
-    }
-
-    LPPROC_THREAD_ATTRIBUTE_LIST get() const noexcept
-    {
-        return value;
-    }
-
-private:
-    std::vector<BYTE> storage;
-    LPPROC_THREAD_ATTRIBUTE_LIST value{ nullptr };
-};
-}
-
 void SyringeDebugger::DebugProcess(std::string_view const arguments)
 {
-    STARTUPINFOEX startupInfo{};
-    startupInfo.StartupInfo.cb = sizeof(startupInfo);
-
-    ProcThreadAttributeList attributeList{ 1 };
-    startupInfo.lpAttributeList = attributeList.get();
-
-    DWORD64 mitigationPolicy =
-        PROCESS_CREATION_MITIGATION_POLICY_DEP_ENABLE |
-        PROCESS_CREATION_MITIGATION_POLICY_DEP_ATL_THUNK_ENABLE;
-
-    if (!UpdateProcThreadAttribute(
-            startupInfo.lpAttributeList,
-            0,
-            PROC_THREAD_ATTRIBUTE_MITIGATION_POLICY,
-            &mitigationPolicy,
-            sizeof(mitigationPolicy),
-            nullptr,
-            nullptr))
-    {
-        throw_lasterror_or(ERROR_ERRORS_ENCOUNTERED, exe);
-    }
+    STARTUPINFO startupInfo{};
+    startupInfo.cb = sizeof(startupInfo);
 
     SetEnvironmentVariable("_NO_DEBUG_HEAP", "1");
 
@@ -101,21 +30,13 @@ void SyringeDebugger::DebugProcess(std::string_view const arguments)
 
     if (CreateProcess(
         exe.c_str(), command_line.data(), nullptr, nullptr, false,
-        DEBUG_ONLY_THIS_PROCESS | CREATE_SUSPENDED | EXTENDED_STARTUPINFO_PRESENT,
-        nullptr, nullptr, &startupInfo.StartupInfo, &pInfo) == FALSE)
+        DEBUG_ONLY_THIS_PROCESS | CREATE_SUSPENDED,
+        nullptr, nullptr, &startupInfo, &pInfo) == FALSE)
     {
         throw_lasterror_or(ERROR_ERRORS_ENCOUNTERED, exe);
     }
 
     workingHandle = pInfo.hProcess;
-
-    if (IsRunningUnderWine())
-    {
-        Log::WriteLine(
-            __FUNCTION__ ": Warning: Wine does not currently apply the child-process "
-            "DEP mitigation attribute. W^X therefore depends on the target executable "
-            "being linked with NX_COMPAT.");
-    }
 }
 
 bool SyringeDebugger::PatchMem(void* address, void const* buffer, DWORD size)
