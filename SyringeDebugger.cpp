@@ -12,14 +12,81 @@
 #include <memory>
 #include <numeric>
 #include <set>
+#include <vector>
 
 #include <DbgHelp.h>
 
 using namespace std;
 
+namespace
+{
+class ProcThreadAttributeList
+{
+public:
+    explicit ProcThreadAttributeList(DWORD const attributeCount)
+    {
+        SIZE_T size = 0;
+        InitializeProcThreadAttributeList(nullptr, attributeCount, 0, &size);
+        if (size == 0)
+        {
+            throw_lasterror_or(ERROR_ERRORS_ENCOUNTERED, "process attribute list");
+        }
+
+        storage.resize(size);
+        auto const candidate = reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(storage.data());
+        if (!InitializeProcThreadAttributeList(candidate, attributeCount, 0, &size))
+        {
+            throw_lasterror_or(ERROR_ERRORS_ENCOUNTERED, "process attribute list");
+        }
+
+        value = candidate;
+    }
+
+    ProcThreadAttributeList(ProcThreadAttributeList const&) = delete;
+    ProcThreadAttributeList& operator=(ProcThreadAttributeList const&) = delete;
+
+    ~ProcThreadAttributeList()
+    {
+        if (value)
+        {
+            DeleteProcThreadAttributeList(value);
+        }
+    }
+
+    LPPROC_THREAD_ATTRIBUTE_LIST get() const noexcept
+    {
+        return value;
+    }
+
+private:
+    std::vector<BYTE> storage;
+    LPPROC_THREAD_ATTRIBUTE_LIST value{ nullptr };
+};
+}
+
 void SyringeDebugger::DebugProcess(std::string_view const arguments)
 {
-    STARTUPINFO startupInfo{ sizeof(startupInfo) };
+    STARTUPINFOEX startupInfo{};
+    startupInfo.StartupInfo.cb = sizeof(startupInfo);
+
+    ProcThreadAttributeList attributeList{ 1 };
+    startupInfo.lpAttributeList = attributeList.get();
+
+    DWORD64 mitigationPolicy =
+        PROCESS_CREATION_MITIGATION_POLICY_DEP_ENABLE |
+        PROCESS_CREATION_MITIGATION_POLICY_DEP_ATL_THUNK_ENABLE;
+
+    if (!UpdateProcThreadAttribute(
+            startupInfo.lpAttributeList,
+            0,
+            PROC_THREAD_ATTRIBUTE_MITIGATION_POLICY,
+            &mitigationPolicy,
+            sizeof(mitigationPolicy),
+            nullptr,
+            nullptr))
+    {
+        throw_lasterror_or(ERROR_ERRORS_ENCOUNTERED, exe);
+    }
 
     SetEnvironmentVariable("_NO_DEBUG_HEAP", "1");
 
@@ -28,8 +95,8 @@ void SyringeDebugger::DebugProcess(std::string_view const arguments)
 
     if (CreateProcess(
         exe.c_str(), command_line.data(), nullptr, nullptr, false,
-        DEBUG_ONLY_THIS_PROCESS | CREATE_SUSPENDED,
-        nullptr, nullptr, &startupInfo, &pInfo) == FALSE)
+        DEBUG_ONLY_THIS_PROCESS | CREATE_SUSPENDED | EXTENDED_STARTUPINFO_PRESENT,
+        nullptr, nullptr, &startupInfo.StartupInfo, &pInfo) == FALSE)
     {
         throw_lasterror_or(ERROR_ERRORS_ENCOUNTERED, exe);
     }
@@ -396,7 +463,7 @@ DWORD SyringeDebugger::HandleException(DEBUG_EVENT const& dbgEvent)
                 PatchMem(&GetData()->LibName, hook->lib, MaxNameLength);
                 PatchMem(&GetData()->ProcName, hook->proc, MaxNameLength);
 
-                context.Eip = reinterpret_cast<DWORD>(&GetData()->LoadLibraryFunc);
+                context.Eip = reinterpret_cast<DWORD>(GetLoaderCode());
             }
             else
             {
@@ -411,7 +478,7 @@ DWORD SyringeDebugger::HandleException(DEBUG_EVENT const& dbgEvent)
                     PatchMem(&GetData()->LibName, entry.lib, MaxNameLength);
                     PatchMem(&GetData()->ProcName, entry.symbol, MaxNameLength);
 
-                    context.Eip = reinterpret_cast<DWORD>(&GetData()->LoadLibraryFunc);
+                    context.Eip = reinterpret_cast<DWORD>(GetLoaderCode());
                 }
                 else
                 {
@@ -463,7 +530,7 @@ DWORD SyringeDebugger::HandleException(DEBUG_EVENT const& dbgEvent)
                 PatchMem(&GetData()->LibName, entry.lib, MaxNameLength);
                 PatchMem(&GetData()->ProcName, entry.symbol, MaxNameLength);
 
-                context.Eip = reinterpret_cast<DWORD>(&GetData()->LoadLibraryFunc);
+                context.Eip = reinterpret_cast<DWORD>(GetLoaderCode());
             }
             else
             {
@@ -803,17 +870,18 @@ DWORD SyringeDebugger::HandleException(DEBUG_EVENT const& dbgEvent)
 
 void SyringeDebugger::Run(std::string_view const arguments)
 {
-    constexpr auto AllocDataSize = sizeof(AllocData);
-
     Log::WriteLine(
         __FUNCTION__ ": Running process to debug. cmd = \"%s %.*s\"",
         exe.c_str(), printable(arguments));
     DebugProcess(arguments);
 
-    Log::WriteLine(__FUNCTION__ ": Allocating 0x%u bytes...", AllocDataSize);
-    pAlloc = AllocMem(nullptr, AllocDataSize);
+    Log::WriteLine(__FUNCTION__ ": Allocating 0x%u bytes for loader code...", LoaderCodeSize);
+    pLoaderCode = AllocMem(nullptr, LoaderCodeSize);
+    Log::WriteLine(__FUNCTION__ ": pLoaderCode = 0x%08X", pLoaderCode.get());
 
-    Log::WriteLine(__FUNCTION__ ": pAlloc = 0x%08X", pAlloc.get());
+    Log::WriteLine(__FUNCTION__ ": Allocating 0x%u bytes for exchange data...", sizeof(ExchangeData));
+    pExchangeData = AllocMem(nullptr, sizeof(ExchangeData));
+    Log::WriteLine(__FUNCTION__ ": pExchangeData = 0x%08X", pExchangeData.get());
 
     // write DLL loader code
     Log::WriteLine(__FUNCTION__ ": Writing DLL loader & caller code...");
@@ -836,21 +904,21 @@ void SyringeDebugger::Run(std::string_view const arguments)
         INT3, NOP							// int3 and some padding
     };
 
-    std::array<BYTE, AllocDataSize> data;
-    static_assert(AllocData::CodeSize >= sizeof(cLoadLibrary));
-    ApplyPatch(data.data(), cLoadLibrary);
-    ApplyPatch(data.data() + 0x04, &GetData()->LibName);
-    ApplyPatch(data.data() + 0x0A, pImLoadLibrary);
-    ApplyPatch(data.data() + 0x13, &GetData()->ProcName);
-    ApplyPatch(data.data() + 0x1A, pImGetProcAddress);
-    ApplyPatch(data.data() + 0x1F, &GetData()->ProcAddress);
-    if (!PatchMem(pAlloc, data.data(), data.size()))
+    std::array<BYTE, LoaderCodeSize> code{};
+    static_assert(LoaderCodeSize >= sizeof(cLoadLibrary));
+    ApplyPatch(code.data(), cLoadLibrary);
+    ApplyPatch(code.data() + 0x04, &GetData()->LibName);
+    ApplyPatch(code.data() + 0x0A, pImLoadLibrary);
+    ApplyPatch(code.data() + 0x13, &GetData()->ProcName);
+    ApplyPatch(code.data() + 0x1A, pImGetProcAddress);
+    ApplyPatch(code.data() + 0x1F, &GetData()->ProcAddress);
+    if (!PatchMem(pLoaderCode, code.data(), code.size()))
     {
         throw_lasterror_or(ERROR_ERRORS_ENCOUNTERED, exe);
     }
-    MakeExecutable(pAlloc, AllocData::CodeSize);
+    MakeExecutable(pLoaderCode, code.size());
 
-    Log::WriteLine(__FUNCTION__ ": pcLoadLibrary = 0x%08X", &GetData()->LoadLibraryFunc);
+    Log::WriteLine(__FUNCTION__ ": pcLoadLibrary = 0x%08X", GetLoaderCode());
 
     // breakpoints for DLL loading and proc address retrieving
     bDLLsLoaded = false;
