@@ -96,6 +96,7 @@ public:
     VirtualMemoryHandle AllocMem(void* address, size_t size);
     void MakeExecutable(VirtualMemoryHandle const& memory, size_t size);
     bool PatchMem(void* address, void const* buffer, DWORD size);
+    bool PatchCode(void* address, void const* buffer, DWORD size);
     bool ReadMem(void const* address, void* buffer, DWORD size);
 
     // syringe

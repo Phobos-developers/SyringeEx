@@ -20,6 +20,12 @@ using namespace std;
 
 namespace
 {
+bool IsRunningUnderWine()
+{
+    auto const ntdll = GetModuleHandleW(L"ntdll.dll");
+    return ntdll && GetProcAddress(ntdll, "wine_get_version");
+}
+
 class ProcThreadAttributeList
 {
 public:
@@ -102,11 +108,25 @@ void SyringeDebugger::DebugProcess(std::string_view const arguments)
     }
 
     workingHandle = pInfo.hProcess;
+
+    if (IsRunningUnderWine())
+    {
+        Log::WriteLine(
+            __FUNCTION__ ": Warning: Wine does not currently apply the child-process "
+            "DEP mitigation attribute. W^X therefore depends on the target executable "
+            "being linked with NX_COMPAT.");
+    }
 }
 
 bool SyringeDebugger::PatchMem(void* address, void const* buffer, DWORD size)
 {
     return (WriteProcessMemory(workingHandle, address, buffer, size, nullptr) != FALSE);
+}
+
+bool SyringeDebugger::PatchCode(void* address, void const* buffer, DWORD size)
+{
+    return PatchMem(address, buffer, size)
+        && FlushInstructionCache(workingHandle, address, size) != FALSE;
 }
 
 bool SyringeDebugger::ReadMem(void const* address, void* buffer, DWORD size)
@@ -140,7 +160,7 @@ bool SyringeDebugger::SetBP(void* address)
     {
         auto const buffer = INT3;
         ReadMem(address, &opcode, 1);
-        return PatchMem(address, &buffer, 1);
+        return PatchCode(address, &buffer, 1);
     }
 
     return true;
@@ -428,14 +448,20 @@ DWORD SyringeDebugger::HandleException(DEBUG_EVENT const& dbgEvent)
         {
             auto const buffer = INT3;
             context.EFlags &= ~0x100;
-            PatchMem(threadInfo.lastBP, &buffer, 1);
+            if (!PatchCode(threadInfo.lastBP, &buffer, 1))
+            {
+                throw_lasterror_or(ERROR_ERRORS_ENCOUNTERED, exe);
+            }
         }
 
         // load DLLs and retrieve proc addresses
         if (!bDLLsLoaded)
         {
             // restore
-            PatchMem(exceptAddr, &Breakpoints[exceptAddr].original_opcode, 1);
+            if (!PatchCode(exceptAddr, &Breakpoints[exceptAddr].original_opcode, 1))
+            {
+                throw_lasterror_or(ERROR_ERRORS_ENCOUNTERED, exe);
+            }
 
             if (loop_LoadLibrary == v_AllHooks.end())
             {
@@ -501,7 +527,10 @@ DWORD SyringeDebugger::HandleException(DEBUG_EVENT const& dbgEvent)
         if (!bFeaturesSet)
         {
             // restore
-            PatchMem(exceptAddr, &Breakpoints[exceptAddr].original_opcode, 1);
+            if (!PatchCode(exceptAddr, &Breakpoints[exceptAddr].original_opcode, 1))
+            {
+                throw_lasterror_or(ERROR_ERRORS_ENCOUNTERED, exe);
+            }
 
             // read the resolved address of the feature flag in the target process
             void* flagAddr = nullptr;
@@ -717,7 +746,10 @@ DWORD SyringeDebugger::HandleException(DEBUG_EVENT const& dbgEvent)
                     ApplyPatch(code.data(), jmp);
                     ApplyPatch(code.data() + 0x01, rel2);
 
-                    PatchMem(p_original_code, code.data(), code.size());
+                    if (!PatchCode(p_original_code, code.data(), static_cast<DWORD>(code.size())))
+                    {
+                        throw_lasterror_or(ERROR_ERRORS_ENCOUNTERED, exe);
+                    }
                 }
 
                 Log::Flush();
@@ -726,7 +758,10 @@ DWORD SyringeDebugger::HandleException(DEBUG_EVENT const& dbgEvent)
             }
 
             // restore
-            PatchMem(exceptAddr, &Breakpoints[exceptAddr].original_opcode, 1);
+            if (!PatchCode(exceptAddr, &Breakpoints[exceptAddr].original_opcode, 1))
+            {
+                throw_lasterror_or(ERROR_ERRORS_ENCOUNTERED, exe);
+            }
 
             // single step mode
             context.EFlags |= 0x100;
@@ -753,7 +788,10 @@ DWORD SyringeDebugger::HandleException(DEBUG_EVENT const& dbgEvent)
     {
         auto const buffer = INT3;
         auto const& threadInfo = Threads[dbgEvent.dwThreadId];
-        PatchMem(threadInfo.lastBP, &buffer, 1);
+        if (!PatchCode(threadInfo.lastBP, &buffer, 1))
+        {
+            throw_lasterror_or(ERROR_ERRORS_ENCOUNTERED, exe);
+        }
 
         HANDLE hThread = threadInfo.Thread;
         CONTEXT context;
@@ -926,7 +964,10 @@ void SyringeDebugger::Run(std::string_view const arguments)
     loop_LoadLibrary = v_AllHooks.end();
 
     // set breakpoint
-    SetBP(pcEntryPoint);
+    if (!SetBP(pcEntryPoint))
+    {
+        throw_lasterror_or(ERROR_ERRORS_ENCOUNTERED, exe);
+    }
 
     DEBUG_EVENT dbgEvent;
     ResumeThread(pInfo.hThread);
@@ -1029,7 +1070,10 @@ void SyringeDebugger::RemoveBP(LPVOID const address, bool const restoreOpcode)
     {
         if (restoreOpcode)
         {
-            PatchMem(address, &i->second.original_opcode, 1);
+            if (!PatchCode(address, &i->second.original_opcode, 1))
+            {
+                throw_lasterror_or(ERROR_ERRORS_ENCOUNTERED, exe);
+            }
         }
 
         Breakpoints.erase(i);
