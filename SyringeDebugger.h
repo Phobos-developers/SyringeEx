@@ -48,23 +48,25 @@ public:
             std::string_view const flagView = flag;
 
             // parse all -i=filename_to_inject from flags
-            if (auto const pos = flagView.find(INCLUDE_FLAG); pos != std::string_view::npos)
+            if (auto const includePos = flagView.find(INCLUDE_FLAG);
+                includePos != std::string_view::npos)
             {
-                dlls.emplace_back(flagView.begin() + pos + INCLUDE_FLAG.size(), flagView.end());
+                dlls.emplace_back(
+                    flagView.begin() + includePos + INCLUDE_FLAG.size(), flagView.end());
             }
-            else if (auto const pos = flagView.find(DETACH_FLAG); pos != std::string_view::npos)
+            else if (flagView.find(DETACH_FLAG) != std::string_view::npos)
             {
                 bDetachWhenDone = true;
             }
-            else if (auto const pos = flagView.find(NODETACH_FLAG); pos != std::string_view::npos)
+            else if (flagView.find(NODETACH_FLAG) != std::string_view::npos)
             {
                 bDetachWhenDone = false;
             }
-            else if (auto const pos = flagView.find(NOWAIT_FLAG); pos != std::string_view::npos)
+            else if (flagView.find(NOWAIT_FLAG) != std::string_view::npos)
             {
                 bWaitForProcessEnd = false;
             }
-            else if (auto const pos = flagView.find(HANDSHAKES_FLAG); pos != std::string_view::npos)
+            else if (flagView.find(HANDSHAKES_FLAG) != std::string_view::npos)
             {
                 bHandshakes = true;
             }

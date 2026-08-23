@@ -865,7 +865,6 @@ DWORD SyringeDebugger::HandleException(DEBUG_EVENT const& dbgEvent)
         return DBG_EXCEPTION_NOT_HANDLED;
     }
 
-    return DBG_CONTINUE;
 }
 
 void SyringeDebugger::Run(std::string_view const arguments)
