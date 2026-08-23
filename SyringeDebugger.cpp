@@ -127,10 +127,18 @@ static void ResolveRelativeOperands(
 }
 
 std::vector<BYTE> SyringeDebugger::RebuildInstructions(
-    BYTE const* bytes, size_t size, DWORD originalAddr, DWORD newAddr)
+    BYTE const* bytes, size_t size, DWORD originalAddr, DWORD newAddr,
+    std::string_view const hookLibraries)
 {
     ZydisDecoder decoder;
     ZydisDecoderInit(&decoder, ZYDIS_MACHINE_MODE_LONG_COMPAT_32, ZYDIS_STACK_WIDTH_32);
+
+    std::string hookContext;
+    if (!hookLibraries.empty())
+    {
+        hookContext = " in DLL(s): ";
+        hookContext += hookLibraries;
+    }
 
     // --- Pass 1: decode all instructions and classify relative branches ---
 
@@ -164,9 +172,9 @@ std::vector<BYTE> SyringeDebugger::RebuildInstructions(
                 Log::WriteLine(
                     __FUNCTION__ ": Failed to decode instruction at 0x%08X, "
                     "copying remaining %u bytes verbatim. This could mean "
-                    "there is a faulty return 0 hook at 0x%08X.",
+                    "there is a faulty return 0 hook at 0x%08X%s.",
                     static_cast<DWORD>(srcAddr), static_cast<unsigned>(size - offset),
-                    originalAddr);
+                    originalAddr, hookContext.c_str());
 
                 tailOffset = offset;
                 break;
@@ -222,10 +230,10 @@ std::vector<BYTE> SyringeDebugger::RebuildInstructions(
                                     Log::WriteLine(
                                         __FUNCTION__ ": Relative instruction "
                                         "at 0x%08X has an intra-prologue target "
-                                        "but no near encoding. Hook at 0x%08X "
+                                        "but no near encoding. Hook at 0x%08X%s "
                                         "may not work correctly.",
-                                        static_cast<DWORD>(srcAddr),
-                                        originalAddr);
+                                        static_cast<DWORD>(srcAddr), originalAddr,
+                                        hookContext.c_str());
                                 }
                             }
                         }
@@ -581,6 +589,27 @@ DWORD SyringeDebugger::HandleException(DEBUG_EVENT const& dbgEvent)
                         continue;
                     }
 
+                    std::set<std::string_view> rebuildLibraries;
+                    for (auto const& hook : it.second.hooks)
+                    {
+                        if (hook.proc_address && hook.num_overridden == overridden)
+                        {
+                            rebuildLibraries.emplace(hook.lib);
+                        }
+                    }
+
+                    std::string rebuildLibraryNames;
+                    for (auto const library : rebuildLibraries)
+                    {
+                        if (!rebuildLibraryNames.empty())
+                        {
+                            rebuildLibraryNames += ", ";
+                        }
+                        rebuildLibraryNames += '"';
+                        rebuildLibraryNames += library;
+                        rebuildLibraryNames += '"';
+                    }
+
                     // read the overridden bytes from the target process
                     std::vector<BYTE> original_bytes(overridden);
                     ReadMem(it.first, original_bytes.data(), overridden);
@@ -621,7 +650,8 @@ DWORD SyringeDebugger::HandleException(DEBUG_EVENT const& dbgEvent)
                             base + (p_code - code.data()));
 
                         auto rebuilt = RebuildInstructions(
-                            original_bytes.data(), overridden, originalAddr, newAddr);
+                            original_bytes.data(), overridden, originalAddr, newAddr,
+                            rebuildLibraryNames);
 
                         std::memcpy(p_code, rebuilt.data(), rebuilt.size());
                         p_code += rebuilt.size();

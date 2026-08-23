@@ -112,7 +112,9 @@ private:
 #ifdef SYRINGE_TESTING
 public:
 #endif
-    static std::vector<BYTE> RebuildInstructions(BYTE const* bytes, size_t size, DWORD originalAddr, DWORD newAddr);
+    static std::vector<BYTE> RebuildInstructions(
+        BYTE const* bytes, size_t size, DWORD originalAddr, DWORD newAddr,
+        std::string_view hookLibraries = {});
 #ifdef SYRINGE_TESTING
 private:
 #endif
