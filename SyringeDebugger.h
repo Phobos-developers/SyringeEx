@@ -206,9 +206,6 @@ private:
 
     bool bAVLogged{ false };
 
-    // data addresses
-    static constexpr auto LoaderCodeSize = 0x1000u;
-
     struct ExchangeData
     {
         void* ProcAddress;
