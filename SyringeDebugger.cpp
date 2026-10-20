@@ -833,10 +833,18 @@ void SyringeDebugger::Run(std::string_view const arguments)
         exe.c_str(), printable(arguments));
     DebugProcess(arguments);
 
+    Log::WriteLine(__FUNCTION__ ": Allocating 0x%u bytes for loader code...", LoaderCodeSize);
+    pLoaderCode = AllocMem(nullptr, LoaderCodeSize);
+    Log::WriteLine(__FUNCTION__ ": pLoaderCode = 0x%08X", pLoaderCode.get());
+
+    Log::WriteLine(__FUNCTION__ ": Allocating 0x%u bytes for exchange data...", sizeof(ExchangeData));
+    pExchangeData = AllocMem(nullptr, sizeof(ExchangeData));
+    Log::WriteLine(__FUNCTION__ ": pExchangeData = 0x%08X", pExchangeData.get());
+
     // write DLL loader code
     Log::WriteLine(__FUNCTION__ ": Writing DLL loader & caller code...");
 
-    static constexpr BYTE cLoadLibrary[] = {
+    static BYTE const cLoadLibrary[] = {
         0x50,								// push eax
         0x51,								// push ecx
         0x52,								// push edx
@@ -854,10 +862,9 @@ void SyringeDebugger::Run(std::string_view const arguments)
         INT3, NOP							// int3 and some padding
     };
 
-    auto code = std::to_array(cLoadLibrary);
-    pLoaderCode = AllocMem(nullptr, code.size());
-    pExchangeData = AllocMem(nullptr, sizeof(ExchangeData));
-
+    std::array<BYTE, LoaderCodeSize> code{};
+    static_assert(LoaderCodeSize >= sizeof(cLoadLibrary));
+    ApplyPatch(code.data(), cLoadLibrary);
     ApplyPatch(code.data() + 0x04, &GetData()->LibName);
     ApplyPatch(code.data() + 0x0A, pImLoadLibrary);
     ApplyPatch(code.data() + 0x13, &GetData()->ProcName);
