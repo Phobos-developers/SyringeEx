@@ -6,7 +6,6 @@
 #include "PortableExecutable.h"
 #include "Log.h"
 
-#include <cstddef>
 #include <cstring>
 #include <iostream>
 #include <map>
@@ -92,7 +91,6 @@ public:
 
     // memory
     VirtualMemoryHandle AllocMem(void* address, size_t size);
-    void MakeExecutable(VirtualMemoryHandle const& memory, size_t size);
     bool PatchMem(void* address, void const* buffer, DWORD size);
     bool ReadMem(void const* address, void* buffer, DWORD size);
 
@@ -205,16 +203,12 @@ private:
     // data addresses
     struct AllocData
     {
-        // Keep executable loader code on its own page. The fields below remain
-        // writable because they are used to exchange data with the debuggee.
-        static constexpr auto CodeSize = 0x1000u;
+        static constexpr auto CodeSize = 0x40u;
         std::byte LoadLibraryFunc[CodeSize];
         void* ProcAddress;
         char LibName[MaxNameLength];
         char ProcName[MaxNameLength];
     };
-
-    static_assert(offsetof(AllocData, ProcAddress) == AllocData::CodeSize);
 
     AllocData* GetData() const noexcept
     {
