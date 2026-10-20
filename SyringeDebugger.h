@@ -188,8 +188,7 @@ private:
     void* pcEntryPoint{ nullptr };
     void* pImLoadLibrary{ nullptr };
     void* pImGetProcAddress{ nullptr };
-    VirtualMemoryHandle pLoaderCode;
-    VirtualMemoryHandle pExchangeData;
+    VirtualMemoryHandle pAlloc;
     DWORD dwTimeStamp{ 0u };
     DWORD dwExeSize{ 0u };
     DWORD dwExeCRC{ 0u };
@@ -204,23 +203,22 @@ private:
     bool bAVLogged{ false };
 
     // data addresses
-    static constexpr auto LoaderCodeSize = 0x1000u;
-
-    struct ExchangeData
+    struct AllocData
     {
+        // Keep executable loader code on its own page. The fields below remain
+        // writable because they are used to exchange data with the debuggee.
+        static constexpr auto CodeSize = 0x1000u;
+        std::byte LoadLibraryFunc[CodeSize];
         void* ProcAddress;
         char LibName[MaxNameLength];
         char ProcName[MaxNameLength];
     };
 
-    ExchangeData* GetData() const noexcept
-    {
-        return reinterpret_cast<ExchangeData*>(pExchangeData.get());
-    };
+    static_assert(offsetof(AllocData, ProcAddress) == AllocData::CodeSize);
 
-    BYTE* GetLoaderCode() const noexcept
+    AllocData* GetData() const noexcept
     {
-        return pLoaderCode.get();
+        return reinterpret_cast<AllocData*>(pAlloc.get());
     };
 
     struct HookBuffer
