@@ -657,10 +657,12 @@ DWORD SyringeDebugger::HandleException(DEBUG_EVENT const& dbgEvent)
                         p_code += rebuilt.size();
                     }
 
+                    auto const overridden_len = std::max(overridden, sizeof(jmp));
+
                     // write the jump back
                     auto const rel = RelativeOffset(
                         base + (p_code - code.data() + 0x05),
-                        static_cast<BYTE*>(it.first) + 0x05);
+                        static_cast<BYTE*>(it.first) + overridden_len);
                     ApplyPatch(p_code, jmp_back);
                     ApplyPatch(p_code + 0x01, rel);
                     p_code += sizeof(jmp_back);
@@ -693,7 +695,7 @@ DWORD SyringeDebugger::HandleException(DEBUG_EVENT const& dbgEvent)
                     auto const p_original_code = static_cast<BYTE*>(it.first);
 
                     auto const rel2 = RelativeOffset(p_original_code + 5, base);
-                    code.assign(std::max(overridden, sizeof(jmp)), NOP);
+                    code.assign(overridden_len, NOP);
                     ApplyPatch(code.data(), jmp);
                     ApplyPatch(code.data() + 0x01, rel2);
 
