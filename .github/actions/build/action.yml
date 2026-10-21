@@ -1,0 +1,50 @@
+name: "Build"
+
+inputs:
+  sln-path:
+    description: "Path to the solution file relative to the repo root"
+    required: false
+    default: "Syringe.sln"
+  build-config:
+    description: "Configuration to build (Debug or Release)"
+    required: true
+  run-tests:
+    description: "Run tests\\bin\\Tests.exe after building and fail on non-zero exit"
+    required: false
+    default: "false"
+  artifact-name:
+    description: "Artifact file name (empty = no upload)"
+    required: false
+    default: ''
+
+runs:
+  using: "composite"
+  steps:
+    - name: Add MSBuild to PATH
+      uses: microsoft/setup-msbuild@v2
+      with:
+        vs-version: '[17.0,)'   # v143 / VS 2022+
+
+    - uses: ammaraskar/msvc-problem-matcher@master
+
+    - name: Build
+      working-directory: ${{ github.workspace }}
+      # The Any CPU solution platform has no Build.0 entries, so Platform=Win32 must be explicit.
+      run: msbuild /m /p:Configuration=${{ inputs.build-config }} /p:Platform=Win32 /v:q ${{ inputs.sln-path }}
+      shell: cmd
+
+    - name: Run tests
+      if: ${{ inputs.run-tests == 'true' }}
+      working-directory: ${{ github.workspace }}
+      run: tests\bin\Tests.exe
+      shell: cmd
+
+    - name: Upload artifact
+      if: ${{ success() && inputs.artifact-name != '' }}
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ inputs.artifact-name }}
+        path: |
+          LICENSE
+          ${{ inputs.build-config }}/Syringe.exe
+          ${{ inputs.build-config }}/Syringe.pdb

@@ -11,6 +11,8 @@
 #include <fstream>
 #include <memory>
 #include <numeric>
+#include <set>
+#include <vector>
 
 #include <DbgHelp.h>
 
@@ -18,780 +20,1308 @@ using namespace std;
 
 void SyringeDebugger::DebugProcess(std::string_view const arguments)
 {
-	STARTUPINFO startupInfo{ sizeof(startupInfo) };
+    STARTUPINFO startupInfo{};
+    startupInfo.cb = sizeof(startupInfo);
 
-	SetEnvironmentVariable("_NO_DEBUG_HEAP", "1");
+    SetEnvironmentVariable("_NO_DEBUG_HEAP", "1");
 
-	auto command_line = '"' + exe + "\" ";
-	command_line += arguments;
+    auto command_line = '"' + exe + "\" ";
+    command_line += arguments;
 
-	if(CreateProcess(
-		exe.c_str(), command_line.data(), nullptr, nullptr, false,
-		DEBUG_ONLY_THIS_PROCESS | CREATE_SUSPENDED,
-		nullptr, nullptr, &startupInfo, &pInfo) == FALSE)
-	{
-		throw_lasterror_or(ERROR_ERRORS_ENCOUNTERED, exe);
-	}
+    if (CreateProcess(
+        exe.c_str(), command_line.data(), nullptr, nullptr, false,
+        DEBUG_ONLY_THIS_PROCESS | CREATE_SUSPENDED,
+        nullptr, nullptr, &startupInfo, &pInfo) == FALSE)
+    {
+        throw_lasterror_or(ERROR_ERRORS_ENCOUNTERED, exe);
+    }
+
+    workingHandle = pInfo.hProcess;
 }
 
 bool SyringeDebugger::PatchMem(void* address, void const* buffer, DWORD size)
 {
-	return (WriteProcessMemory(pInfo.hProcess, address, buffer, size, nullptr) != FALSE);
+    return (WriteProcessMemory(workingHandle, address, buffer, size, nullptr) != FALSE);
+}
+
+bool SyringeDebugger::PatchCode(void* address, void const* buffer, DWORD size)
+{
+    return PatchMem(address, buffer, size)
+        && FlushInstructionCache(workingHandle, address, size) != FALSE;
 }
 
 bool SyringeDebugger::ReadMem(void const* address, void* buffer, DWORD size)
 {
-	return (ReadProcessMemory(pInfo.hProcess, address, buffer, size, nullptr) != FALSE);
+    return (ReadProcessMemory(workingHandle, address, buffer, size, nullptr) != FALSE);
 }
 
 VirtualMemoryHandle SyringeDebugger::AllocMem(void* address, size_t size)
 {
-	if(VirtualMemoryHandle res{ pInfo.hProcess, address, size }) {
-		return res;
-	}
+    if (VirtualMemoryHandle res{ workingHandle, address, size })
+    {
+        return res;
+    }
 
-	throw_lasterror_or(ERROR_ERRORS_ENCOUNTERED, exe);
+    throw_lasterror_or(ERROR_ERRORS_ENCOUNTERED, exe);
+}
+
+void SyringeDebugger::MakeExecutable(VirtualMemoryHandle const& memory, size_t size)
+{
+    if (!memory.protect(size, PAGE_EXECUTE_READ)
+        || !memory.flush_instruction_cache(size))
+    {
+        throw_lasterror_or(ERROR_ERRORS_ENCOUNTERED, exe);
+    }
 }
 
 bool SyringeDebugger::SetBP(void* address)
 {
-	// save overwritten code and set INT 3
-	if(auto& opcode = Breakpoints[address].original_opcode; opcode == 0x00) {
-		auto const buffer = INT3;
-		ReadMem(address, &opcode, 1);
-		return PatchMem(address, &buffer, 1);
-	}
+    // save overwritten code and set INT 3
+    if (auto& opcode = Breakpoints[address].original_opcode; opcode == 0x00)
+    {
+        auto const buffer = INT3;
+        ReadMem(address, &opcode, 1);
+        return PatchCode(address, &buffer, 1);
+    }
 
-	return true;
+    return true;
 }
 
 DWORD __fastcall SyringeDebugger::RelativeOffset(void const* pFrom, void const* pTo)
 {
-	auto const from = reinterpret_cast<DWORD>(pFrom);
-	auto const to = reinterpret_cast<DWORD>(pTo);
+    auto const from = reinterpret_cast<DWORD>(pFrom);
+    auto const to = reinterpret_cast<DWORD>(pTo);
 
-	return to - from;
+    return to - from;
+}
+
+// Resolve relative operands in an encoder request to absolute addresses.
+static void ResolveRelativeOperands(
+    ZydisEncoderRequest& req,
+    ZydisDecodedInstruction const& instruction,
+    ZydisDecodedOperand const* operands,
+    ZyanU64 srcAddr)
+{
+    for (ZyanU8 i = 0; i < req.operand_count; ++i)
+    {
+        if (req.operands[i].type == ZYDIS_OPERAND_TYPE_IMMEDIATE)
+        {
+            ZyanU64 absAddr;
+            if (ZYAN_SUCCESS(ZydisCalcAbsoluteAddress(
+                    &instruction, &operands[i], srcAddr, &absAddr)))
+            {
+                req.operands[i].imm.u = absAddr;
+            }
+        }
+        else if (req.operands[i].type == ZYDIS_OPERAND_TYPE_MEMORY)
+        {
+            ZyanU64 absAddr;
+            if (ZYAN_SUCCESS(ZydisCalcAbsoluteAddress(
+                    &instruction, &operands[i], srcAddr, &absAddr)))
+            {
+                req.operands[i].mem.displacement =
+                    static_cast<ZyanI64>(absAddr);
+            }
+        }
+    }
+}
+
+std::vector<BYTE> SyringeDebugger::RebuildInstructions(
+    BYTE const* bytes, size_t size, DWORD originalAddr, DWORD newAddr,
+    std::string_view const hookLibraries)
+{
+    ZydisDecoder decoder;
+    ZydisDecoderInit(&decoder, ZYDIS_MACHINE_MODE_LONG_COMPAT_32, ZYDIS_STACK_WIDTH_32);
+
+    std::string hookContext;
+    if (!hookLibraries.empty())
+    {
+        hookContext = " in DLL(s): ";
+        hookContext += hookLibraries;
+    }
+
+    // --- Pass 1: decode all instructions and classify relative branches ---
+
+    struct InstructionInfo
+    {
+        size_t srcOffset;       // offset into original bytes
+        ZyanU8 srcLength;       // original instruction length
+        bool intraPrologue;     // relative branch targets within the prologue
+        size_t targetSrcOffset; // source offset of branch target (intra-prologue only)
+        size_t outputSize;      // size in the output buffer
+        size_t outputOffset;    // offset within the output buffer
+        std::optional<ZydisEncoderRequest> encoderReq; // cached encoder request (relative instrs only)
+    };
+
+    std::vector<InstructionInfo> infos;
+    size_t tailOffset = size; // offset of undecoded tail, if any
+
+    {
+        size_t offset = 0;
+        size_t outOff = 0;
+        while (offset < size)
+        {
+            ZydisDecodedInstruction instruction;
+            ZydisDecodedOperand operands[ZYDIS_MAX_OPERAND_COUNT];
+
+            auto const srcAddr = static_cast<ZyanU64>(originalAddr + offset);
+
+            if (ZYAN_FAILED(ZydisDecoderDecodeFull(
+                    &decoder, bytes + offset, size - offset, &instruction, operands)))
+            {
+                Log::WriteLine(
+                    __FUNCTION__ ": Failed to decode instruction at 0x%08X, "
+                    "copying remaining %u bytes verbatim. This could mean "
+                    "there is a faulty return 0 hook at 0x%08X%s.",
+                    static_cast<DWORD>(srcAddr), static_cast<unsigned>(size - offset),
+                    originalAddr, hookContext.c_str());
+
+                tailOffset = offset;
+                break;
+            }
+
+            InstructionInfo info{};
+            info.srcOffset = offset;
+            info.srcLength = instruction.length;
+            info.outputSize = instruction.length; // default fallback
+            info.intraPrologue = false;
+            info.targetSrcOffset = 0;
+
+            if (instruction.attributes & ZYDIS_ATTRIB_IS_RELATIVE)
+            {
+                // Only Jcc, JMP, and CALL have near (rel32) forms.
+                // LOOP/LOOPE/LOOPNE/JCXZ/JECXZ/JRCXZ are rel8-only but
+                // Zydis classifies them as COND_BR, so we must exclude
+                // them by mnemonic.
+                auto const cat = instruction.meta.category;
+                auto const mn = instruction.mnemonic;
+                bool const hasNearForm =
+                    (cat == ZYDIS_CATEGORY_COND_BR
+                        || cat == ZYDIS_CATEGORY_UNCOND_BR
+                        || cat == ZYDIS_CATEGORY_CALL)
+                    && mn != ZYDIS_MNEMONIC_LOOP
+                    && mn != ZYDIS_MNEMONIC_LOOPE
+                    && mn != ZYDIS_MNEMONIC_LOOPNE
+                    && mn != ZYDIS_MNEMONIC_JCXZ
+                    && mn != ZYDIS_MNEMONIC_JECXZ
+                    && mn != ZYDIS_MNEMONIC_JRCXZ;
+
+                // Find the immediate operand and resolve its absolute target.
+                for (ZyanU8 i = 0; i < instruction.operand_count_visible; ++i)
+                {
+                    if (operands[i].type == ZYDIS_OPERAND_TYPE_IMMEDIATE)
+                    {
+                        ZyanU64 absAddr;
+                        if (ZYAN_SUCCESS(ZydisCalcAbsoluteAddress(
+                                &instruction, &operands[i], srcAddr, &absAddr)))
+                        {
+                            // Check if target falls within the prologue.
+                            if (absAddr >= originalAddr
+                                && absAddr < originalAddr + size)
+                            {
+                                if (hasNearForm)
+                                {
+                                    info.intraPrologue = true;
+                                    info.targetSrcOffset =
+                                        static_cast<size_t>(absAddr - originalAddr);
+                                }
+                                else
+                                {
+                                    Log::WriteLine(
+                                        __FUNCTION__ ": Relative instruction "
+                                        "at 0x%08X has an intra-prologue target "
+                                        "but no near encoding. Hook at 0x%08X%s "
+                                        "may not work correctly.",
+                                        static_cast<DWORD>(srcAddr), originalAddr,
+                                        hookContext.c_str());
+                                }
+                            }
+                        }
+                        break;
+                    }
+                }
+
+                // Build and cache the encoder request for pass 2.
+                ZydisEncoderRequest req;
+                if (!ZYAN_FAILED(ZydisEncoderDecodedInstructionToEncoderRequest(
+                        &instruction, operands,
+                        instruction.operand_count_visible, &req)))
+                {
+                    ResolveRelativeOperands(
+                        req, instruction, operands, srcAddr);
+
+                    if (hasNearForm)
+                    {
+                        // Force near encoding so output size is deterministic
+                        // regardless of the final destination address.
+                        req.branch_type = ZYDIS_BRANCH_TYPE_NEAR;
+                        req.branch_width = ZYDIS_BRANCH_WIDTH_32;
+                    }
+
+                    info.encoderReq = req;
+
+                    if (hasNearForm)
+                    {
+                        // 6 bytes for Jcc near (0F 8x rel32), 5 bytes for JMP/CALL (E9/E8 rel32).
+                        info.outputSize = (instruction.meta.category == ZYDIS_CATEGORY_COND_BR)
+                            ? 6u : 5u;
+                    }
+                }
+            }
+
+            info.outputOffset = outOff;
+            outOff += info.outputSize;
+
+            infos.push_back(info);
+            offset += instruction.length;
+        }
+    }
+
+    // --- Pass 2: emit relocated instructions ---
+
+    std::vector<BYTE> result;
+    result.reserve(size * 2);
+
+    for (size_t idx = 0; idx < infos.size(); ++idx)
+    {
+        auto const& info = infos[idx];
+        auto const srcAddr = static_cast<ZyanU64>(originalAddr + info.srcOffset);
+        auto const dstAddr = static_cast<ZyanU64>(newAddr + result.size());
+
+        if (!info.encoderReq)
+        {
+            result.insert(result.end(),
+                bytes + info.srcOffset,
+                bytes + info.srcOffset + info.srcLength);
+            continue;
+        }
+
+        auto req = *info.encoderReq;
+
+        if (info.intraPrologue)
+        {
+            // Map the immediate target to its relocated output offset.
+            for (ZyanU8 i = 0; i < req.operand_count; ++i)
+            {
+                // For jumps within the prologue, find the instruction to which
+                // the jump is, and substitute its new shifted absolute address
+                if (req.operands[i].type == ZYDIS_OPERAND_TYPE_IMMEDIATE)
+                {
+                    for (size_t j = 0; j < infos.size(); ++j)
+                    {
+                        if (infos[j].srcOffset == info.targetSrcOffset)
+                        {
+                            req.operands[i].imm.u = static_cast<ZyanU64>(
+                                newAddr + infos[j].outputOffset);
+                            break;
+                        }
+                    }
+                    break;
+                }
+            }
+        }
+
+        BYTE encoded[ZYDIS_MAX_INSTRUCTION_LENGTH];
+        ZyanUSize encodedLen = sizeof(encoded);
+
+        if (ZYAN_FAILED(ZydisEncoderEncodeInstructionAbsolute(
+                &req, encoded, &encodedLen, dstAddr)))
+        {
+            Log::WriteLine(
+                __FUNCTION__ ": Failed to re-encode instruction at 0x%08X, "
+                "copying %u bytes verbatim. This could mean there is a "
+                "faulty return 0 hook at 0x%08X.",
+                static_cast<DWORD>(srcAddr), info.srcLength,
+                originalAddr);
+
+            result.insert(result.end(),
+                bytes + info.srcOffset,
+                bytes + info.srcOffset + info.srcLength);
+        }
+        else
+        {
+            result.insert(result.end(), encoded, encoded + encodedLen);
+        }
+    }
+
+    // Append any undecoded tail bytes verbatim.
+    if (tailOffset < size)
+        result.insert(result.end(), bytes + tailOffset, bytes + size);
+
+    return result;
 }
 
 DWORD SyringeDebugger::HandleException(DEBUG_EVENT const& dbgEvent)
 {
-	auto const exceptCode = dbgEvent.u.Exception.ExceptionRecord.ExceptionCode;
-	auto const exceptAddr = dbgEvent.u.Exception.ExceptionRecord.ExceptionAddress;
+    auto const exceptCode = dbgEvent.u.Exception.ExceptionRecord.ExceptionCode;
+    auto const exceptAddr = dbgEvent.u.Exception.ExceptionRecord.ExceptionAddress;
 
-	if(exceptCode == EXCEPTION_BREAKPOINT)
-	{
-		auto& threadInfo = Threads[dbgEvent.dwThreadId];
-		HANDLE currentThread = threadInfo.Thread;
-		CONTEXT context;
+    if (exceptCode == EXCEPTION_BREAKPOINT)
+    {
+        auto& threadInfo = Threads[dbgEvent.dwThreadId];
+        HANDLE currentThread = threadInfo.Thread;
+        CONTEXT context;
 
-		context.ContextFlags = CONTEXT_CONTROL;
-		GetThreadContext(currentThread, &context);
+        context.ContextFlags = CONTEXT_CONTROL;
+        GetThreadContext(currentThread, &context);
 
-		// entry breakpoint
-		if(bEntryBP)
-		{
-			bEntryBP = false;
-			return DBG_CONTINUE;
-		}
+        // entry breakpoint
+        if (bEntryBP)
+        {
+            bEntryBP = false;
+            return DBG_CONTINUE;
+        }
 
-		// fix single step repetition issues
-		if(context.EFlags & 0x100)
-		{
-			auto const buffer = INT3;
-			context.EFlags &= ~0x100;
-			PatchMem(threadInfo.lastBP, &buffer, 1);
-		}
+        // fix single step repetition issues
+        if (context.EFlags & 0x100)
+        {
+            auto const buffer = INT3;
+            context.EFlags &= ~0x100;
+            if (!PatchCode(threadInfo.lastBP, &buffer, 1))
+            {
+                throw_lasterror_or(ERROR_ERRORS_ENCOUNTERED, exe);
+            }
+        }
 
-		// load DLLs and retrieve proc addresses
-		if(!bDLLsLoaded)
-		{
-			// restore
-			PatchMem(exceptAddr, &Breakpoints[exceptAddr].original_opcode, 1);
+        // load DLLs and retrieve proc addresses
+        if (!bDLLsLoaded)
+        {
+            // restore
+            if (!PatchCode(exceptAddr, &Breakpoints[exceptAddr].original_opcode, 1))
+            {
+                throw_lasterror_or(ERROR_ERRORS_ENCOUNTERED, exe);
+            }
 
-			if(loop_LoadLibrary == v_AllHooks.end())
-			{
-				loop_LoadLibrary = v_AllHooks.begin();
-			}
-			else
-			{
-				auto const& hook = *loop_LoadLibrary;
-				ReadMem(&GetData()->ProcAddress, &hook->proc_address, 4);
+            if (loop_LoadLibrary == v_AllHooks.end())
+            {
+                loop_LoadLibrary = v_AllHooks.begin();
+            }
+            else
+            {
+                auto const& hook = *loop_LoadLibrary;
+                ReadMem(&GetData()->ProcAddress, &hook->proc_address, 4);
 
-				if(!hook->proc_address) {
-					Log::WriteLine(
-						__FUNCTION__ ": Could not retrieve ProcAddress for: %s "
-						"- %s", hook->lib, hook->proc);
-				}
+                if (!hook->proc_address)
+                {
+                    Log::WriteLine(
+                        __FUNCTION__ ": Could not retrieve ProcAddress for: %s "
+                        "- %s",
+                        hook->lib, hook->proc);
+                }
 
-				++loop_LoadLibrary;
-			}
+                ++loop_LoadLibrary;
+            }
 
-			if(loop_LoadLibrary != v_AllHooks.end())
-			{
-				auto const& hook = *loop_LoadLibrary;
-				PatchMem(&GetData()->LibName, hook->lib, MaxNameLength);
-				PatchMem(&GetData()->ProcName, hook->proc, MaxNameLength);
+            if (loop_LoadLibrary != v_AllHooks.end())
+            {
+                auto const& hook = *loop_LoadLibrary;
+                PatchMem(&GetData()->LibName, hook->lib, MaxNameLength);
+                PatchMem(&GetData()->ProcName, hook->proc, MaxNameLength);
 
-				context.Eip = reinterpret_cast<DWORD>(&GetData()->LoadLibraryFunc);
-			}
-			else
-			{
-				Log::WriteLine(__FUNCTION__ ": Finished retrieving proc addresses.");
-				bDLLsLoaded = true;
+                context.Eip = reinterpret_cast<DWORD>(GetLoaderCode());
+            }
+            else
+            {
+                Log::WriteLine(__FUNCTION__ ": Finished retrieving proc addresses.");
+                bDLLsLoaded = true;
 
-				context.Eip = reinterpret_cast<DWORD>(pcEntryPoint);
-			}
+                if (!v_FeatureFlags.empty())
+                {
+                    Log::WriteLine(__FUNCTION__ ": Starting feature flags resolution...");
+                    loop_FeatureFlags = v_FeatureFlags.begin();
+                    auto const& entry = *loop_FeatureFlags;
+                    PatchMem(&GetData()->LibName, entry.lib, MaxNameLength);
+                    PatchMem(&GetData()->ProcName, entry.symbol, MaxNameLength);
 
-			// single step mode
-			context.EFlags |= 0x100;
-			context.ContextFlags = CONTEXT_CONTROL;
-			SetThreadContext(currentThread, &context);
+                    context.Eip = reinterpret_cast<DWORD>(GetLoaderCode());
+                }
+                else
+                {
+                    bFeaturesSet = true;
+                    context.Eip = reinterpret_cast<DWORD>(pcEntryPoint);
+                }
+            }
 
-			threadInfo.lastBP = exceptAddr;
+            // single step mode
+            context.EFlags |= 0x100;
+            context.ContextFlags = CONTEXT_CONTROL;
+            SetThreadContext(currentThread, &context);
 
-			return DBG_CONTINUE;
-		}
+            threadInfo.lastBP = exceptAddr;
 
-		if(exceptAddr == pcEntryPoint)
-		{
-			if(!bHooksCreated)
-			{
-				Log::WriteLine(__FUNCTION__ ": Creating code hooks.");
+            return DBG_CONTINUE;
+        }
 
-				// FS:[0x14] is a part of the Thread Information Block (TIB)
-				// structure and is designated as the "arbitrary user pointer".
-				// While Raymond Chen has mentioned that this field is "not safe"
-				// to use for arbitrary purposes, this appears to not be the case,
-				// judging by the article he cites as source (lol)
+        // set feature flags in loaded DLLs
+        if (!bFeaturesSet)
+        {
+            // restore
+            if (!PatchCode(exceptAddr, &Breakpoints[exceptAddr].original_opcode, 1))
+            {
+                throw_lasterror_or(ERROR_ERRORS_ENCOUNTERED, exe);
+            }
 
-				// https://devblogs.microsoft.com/oldnewthing/20190418-00/?p=102428
-				// https://web.archive.org/web/20250707201905/http://www.nynaeve.net/?p=98
+            // read the resolved address of the feature flag in the target process
+            void* flagAddr = nullptr;
+            ReadMem(&GetData()->ProcAddress, &flagAddr, 4);
 
-				static BYTE const code_call[] =
-				{
-					0x60, 0x9C, // PUSHAD, PUSHFD
-					0x68, INIT, INIT, INIT, INIT, // PUSH HookAddress
-					0x54, // PUSH ESP
-					0xE8, INIT, INIT, INIT, INIT, // CALL ProcAddress
-					0x83, 0xC4, 0x08, // ADD ESP, 8
-					0x64, /* FS segment prefix*/ 0xA3, 0x14, 0x00, 0x00, 0x00, // MOV fs:0x14, EAX
-					0x9D, 0x61, // POPFD, POPAD
-					0x64, /* FS segment prefix*/ 0x83, 0x3D, 0x14, 0x00, 0x00, 0x00, 0x00, // CMP DWORD PTR fs:0x14, 0
-					0x74, 0x07, // JE proceed
-					0x64, /* FS segment prefix*/ 0xFF, 0x25, 0x14, 0x00, 0x00, 0x00, // JMP DWORD PTR fs:0x14
-					// proceed:
-					// here will be the overwritten bytes and jump back
-				};
+            if (flagAddr)
+            {
+                BYTE const trueVal = 1;
+                PatchMem(flagAddr, &trueVal, 1);
+                Log::WriteLine(
+                    __FUNCTION__ ": Set feature flag \"%s\" in \"%s\" at 0x%08X",
+                    loop_FeatureFlags->symbol, loop_FeatureFlags->lib, flagAddr);
+            }
+            else
+            {
+                Log::WriteLine(
+                    __FUNCTION__ ": Feature flag \"%s\" not exported by \"%s\", skipping.",
+                    loop_FeatureFlags->symbol, loop_FeatureFlags->lib);
+            }
 
-				// return 0 hooks are chained, so this structure may repeat
+            ++loop_FeatureFlags;
 
-				static BYTE const jmp_back[] = { 0xE9, INIT, INIT, INIT, INIT };
-				static BYTE const jmp[] = { 0xE9, INIT, INIT, INIT, INIT };
+            if (loop_FeatureFlags != v_FeatureFlags.end())
+            {
+                auto const& entry = *loop_FeatureFlags;
+                PatchMem(&GetData()->LibName, entry.lib, MaxNameLength);
+                PatchMem(&GetData()->ProcName, entry.symbol, MaxNameLength);
 
-				std::vector<BYTE> code;
+                context.Eip = reinterpret_cast<DWORD>(GetLoaderCode());
+            }
+            else
+            {
+                Log::WriteLine(__FUNCTION__ ": Finished setting feature flags.");
+                bFeaturesSet = true;
 
-				for(auto& it : Breakpoints)
-				{
-					if(it.first == nullptr || it.first == pcEntryPoint)
-					{
-						continue;
-					}
+                context.Eip = reinterpret_cast<DWORD>(pcEntryPoint);
+            }
 
-					auto const [count, overridden] = std::accumulate(
-						it.second.hooks.cbegin(), it.second.hooks.cend(),
-						std::make_pair(0u, 0u), [](auto acc, auto const& hook)
-					{
-						if(hook.proc_address) {
-							if(acc.second < hook.num_overridden) {
-								acc.second = hook.num_overridden;
-							}
-							acc.first++;
-						}
-						return acc;
-					});
+            // single step mode
+            context.EFlags |= 0x100;
+            context.ContextFlags = CONTEXT_CONTROL;
+            SetThreadContext(currentThread, &context);
 
-					if(!count)
-					{
-						continue;
-					}
+            threadInfo.lastBP = exceptAddr;
 
-					auto const sz = count * sizeof(code_call)
-						+ sizeof(jmp_back) + overridden;
+            return DBG_CONTINUE;
+        }
 
-					code.resize(sz);
-					auto p_code = code.data();
+        if (exceptAddr == pcEntryPoint)
+        {
+            if (!bHooksCreated)
+            {
+                Log::WriteLine(__FUNCTION__ ": Creating code hooks.");
 
-					it.second.p_caller_code = AllocMem(nullptr, sz);
-					auto const base = it.second.p_caller_code.get();
+                // FS:[0x14] is a part of the Thread Information Block (TIB)
+                // structure and is designated as the "arbitrary user pointer".
+                // While Raymond Chen has mentioned that this field is "not safe"
+                // to use for arbitrary purposes, this appears to not be the case,
+                // judging by the article he cites as source (lol)
 
-					// write caller code
-					for(auto const& hook : it.second.hooks)
-					{
-						if(hook.proc_address)
-						{
-							ApplyPatch(p_code, code_call); // code
-							ApplyPatch(p_code + 0x03, it.first); // PUSH HookAddress
+                // https://devblogs.microsoft.com/oldnewthing/20190418-00/?p=102428
+                // https://web.archive.org/web/20250707201905/http://www.nynaeve.net/?p=98
 
-							auto const rel = RelativeOffset(
-								base + (p_code - code.data() + 0x0D), hook.proc_address);
-							ApplyPatch(p_code + 0x09, rel); // CALL
+                #define POPFD_POPAD \
+                    0x9D, /* POPFD */ \
+                    /* start POPAD replica */ \
+                    0x5F, /* POP EDI */ \
+                    0x5E, /* POP ESI */ \
+                    0x5D, /* POP EBP */ \
+                    0x5B, /* POP EBX (temporary storage for modified ESP) */ \
+                    0x8B, 0x44, 0x24, 0x0C, /* MOV EAX, [ESP + 0xC] (restore EAX which is last in PUSHAD order) */ \
+                    0x89, 0x5C, 0x24, 0x0C, /* MOV [ESP + 0xC], EBX (place ESP last) */ \
+                    0x5B, /* POP EBX */ \
+                    0x5A, /* POP EDX */ \
+                    0x59, /* POP ECX */ \
+                    0x5C /* POP ESP (restore ESP last thus not corrupting the stack pointer before all POPs are done) */ \
+                    /* end POPAD replica */
 
-							p_code += sizeof(code_call);
-						}
-					}
+                static BYTE const code_call[] =
+                {
+                    0x60, 0x9C, // PUSHAD, PUSHFD
+                    0x68, INIT, INIT, INIT, INIT, // PUSH HookAddress
+                    0x54, // PUSH ESP (final REGISTERS* argument)
+                    0xE8, INIT, INIT, INIT, INIT, // CALL ProcAddress
+                    0x83, 0xC4, 0x08, // ADD ESP, 8
+                    0x64, /* FS segment prefix */ 0xA3, 0x14, 0x00, 0x00, 0x00, // MOV fs:0x14, EAX
+                    0x64, /* FS segment prefix */ 0x83, 0x3D, 0x14, 0x00, 0x00, 0x00, 0x00, // CMP DWORD PTR fs:0x14, 0
+                    0x74, 0x18, // JE proceed
 
-					// write overridden bytes
-					if(overridden)
-					{
-						ReadMem(it.first, p_code, overridden);
-						p_code += overridden;
-					}
+                    // jmp_to_address:
+                    POPFD_POPAD,
+                    0x64, /* FS segment prefix */ 0xFF, 0x25, 0x14, 0x00, 0x00, 0x00, // JMP DWORD PTR fs:0x14
 
-					const auto overridden_len = std::max(overridden, sizeof(jmp));
+                    // proceed:
+                    POPFD_POPAD,
+                    // here will be the overwritten bytes and jump back
+                };
 
-					// write the jump back
-					auto const rel = RelativeOffset(
-						base + (p_code - code.data() + 0x05),
-						static_cast<BYTE*>(it.first) + /*0x05*/overridden_len);
-					ApplyPatch(p_code, jmp_back);
-					ApplyPatch(p_code + 0x01, rel);
+                // return 0 hooks are chained, so this structure may repeat
 
-					PatchMem(base, code.data(), code.size());
+                static BYTE const jmp_back[] = { 0xE9, INIT, INIT, INIT, INIT };
+                static BYTE const jmp[] = { 0xE9, INIT, INIT, INIT, INIT };
 
-					// dump
-					/*
-					Log::WriteLine("Call dump for 0x%08X at 0x%08X:", it.first, base);
+                std::vector<BYTE> code;
 
-					code.resize(sz);
-					ReadMem(it.second.p_caller_code, code.data(), sz);
+                for (auto& it : Breakpoints)
+                {
+                    if (it.first == nullptr || it.first == pcEntryPoint)
+                    {
+                        continue;
+                    }
 
-					std::string dump_str{ "\t\t" };
-					for(auto const& byte : code) {
-						char buffer[0x10];
-						sprintf(buffer, "%02X ", byte);
-						dump_str += buffer;
-					}
+                    auto const [count, overridden] = std::accumulate(
+                        it.second.hooks.cbegin(), it.second.hooks.cend(),
+                        std::make_pair(0u, 0u), [](auto acc, auto const& hook)
+                        {
+                            if (hook.proc_address) {
+                                if (acc.second < hook.num_overridden) {
+                                    acc.second = hook.num_overridden;
+                                }
+                                acc.first++;
+                            }
+                            return acc; });
 
-					Log::WriteLine(dump_str.c_str());
-					Log::WriteLine();*/
+                    if (!count)
+                    {
+                        continue;
+                    }
 
-					// patch original code
-					auto const p_original_code = static_cast<BYTE*>(it.first);
+                    std::set<std::string_view> rebuildLibraries;
+                    for (auto const& hook : it.second.hooks)
+                    {
+                        if (hook.proc_address && hook.num_overridden == overridden)
+                        {
+                            rebuildLibraries.emplace(hook.lib);
+                        }
+                    }
 
-					auto const rel2 = RelativeOffset(p_original_code + 5, base);
-					code.assign(overridden_len, NOP);
-					ApplyPatch(code.data(), jmp);
-					ApplyPatch(code.data() + 0x01, rel2);
+                    std::string rebuildLibraryNames;
+                    for (auto const library : rebuildLibraries)
+                    {
+                        if (!rebuildLibraryNames.empty())
+                        {
+                            rebuildLibraryNames += ", ";
+                        }
+                        rebuildLibraryNames += '"';
+                        rebuildLibraryNames += library;
+                        rebuildLibraryNames += '"';
+                    }
 
-					PatchMem(p_original_code, code.data(), code.size());
-				}
+                    // read the overridden bytes from the target process
+                    std::vector<BYTE> original_bytes(overridden);
+                    ReadMem(it.first, original_bytes.data(), overridden);
 
-				Log::Flush();
+                    // use a conservative upper bound for rebuilt instructions,
+                    // since relative instruction re-encoding may change sizes
+                    // (e.g. short branch -> near branch)
+                    auto const max_rebuilt = overridden * 3;
+                    auto const sz = count * sizeof(code_call) + sizeof(jmp_back) + max_rebuilt;
 
-				bHooksCreated = true;
-			}
+                    code.resize(sz);
+                    auto p_code = code.data();
 
-			// restore
-			PatchMem(exceptAddr, &Breakpoints[exceptAddr].original_opcode, 1);
+                    it.second.p_caller_code = AllocMem(nullptr, sz);
+                    auto const base = it.second.p_caller_code.get();
 
-			// single step mode
-			context.EFlags |= 0x100;
-			--context.Eip;
+                    // write caller code
+                    for (auto const& hook : it.second.hooks)
+                    {
+                        if (hook.proc_address)
+                        {
+                            ApplyPatch(p_code, code_call);		 // code
+                            ApplyPatch(p_code + 0x03, it.first); // PUSH HookAddress
 
-			context.ContextFlags = CONTEXT_CONTROL;
-			SetThreadContext(currentThread, &context);
+                            auto const rel = RelativeOffset(
+                                base + (p_code - code.data() + 0x0D), hook.proc_address);
+                            ApplyPatch(p_code + 0x09, rel); // CALL
 
-			threadInfo.lastBP = exceptAddr;
+                            p_code += sizeof(code_call);
+                        }
+                    }
 
-			return DBG_CONTINUE;
-		} 
-		else
-		{
-			// could be a Debugger class breakpoint to call a patching function!
+                    // rebuild overridden bytes, adjusting relative addresses
+                    if (overridden)
+                    {
+                        auto const originalAddr = reinterpret_cast<DWORD>(it.first);
+                        auto const newAddr = reinterpret_cast<DWORD>(
+                            base + (p_code - code.data()));
 
-			context.ContextFlags = CONTEXT_CONTROL;
-			SetThreadContext(currentThread, &context);
+                        auto rebuilt = RebuildInstructions(
+                            original_bytes.data(), overridden, originalAddr, newAddr,
+                            rebuildLibraryNames);
 
-			return DBG_EXCEPTION_NOT_HANDLED;
-		}
-	}
-	else if(exceptCode == EXCEPTION_SINGLE_STEP)
-	{
-		auto const buffer = INT3;
-		auto const& threadInfo = Threads[dbgEvent.dwThreadId];
-		PatchMem(threadInfo.lastBP, &buffer, 1);
+                        std::memcpy(p_code, rebuilt.data(), rebuilt.size());
+                        p_code += rebuilt.size();
+                    }
 
-		HANDLE hThread = threadInfo.Thread;
-		CONTEXT context;
+                    auto const overridden_len = std::max(overridden, sizeof(jmp));
 
-		context.ContextFlags = CONTEXT_CONTROL;
-		GetThreadContext(hThread, &context);
+                    // write the jump back
+                    auto const rel = RelativeOffset(
+                        base + (p_code - code.data() + 0x05),
+                        static_cast<BYTE*>(it.first) + overridden_len);
+                    ApplyPatch(p_code, jmp_back);
+                    ApplyPatch(p_code + 0x01, rel);
+                    p_code += sizeof(jmp_back);
 
-		context.EFlags &= ~0x100;
+                    auto const actual_sz = static_cast<size_t>(p_code - code.data());
+                    if (!PatchMem(base, code.data(), actual_sz))
+                    {
+                        throw_lasterror_or(ERROR_ERRORS_ENCOUNTERED, exe);
+                    }
+                    MakeExecutable(it.second.p_caller_code, sz);
 
-		context.ContextFlags = CONTEXT_CONTROL;
-		SetThreadContext(hThread, &context);
+                    // dump
+                    /*
+                    Log::WriteLine("Call dump for 0x%08X at 0x%08X:", it.first, base);
 
-		return DBG_CONTINUE;
-	}
-	else
-	{
-		Log::WriteLine(
-			__FUNCTION__ ": Exception (Code: 0x%08X at 0x%08X)!", exceptCode,
-			exceptAddr);
+                    code.resize(sz);
+                    ReadMem(it.second.p_caller_code, code.data(), sz);
 
-		if(!bAVLogged)
-		{
-			//Log::WriteLine(__FUNCTION__ ": ACCESS VIOLATION at 0x%08X!", exceptAddr);
-			auto const& threadInfo = Threads[dbgEvent.dwThreadId];
-			HANDLE currentThread = threadInfo.Thread;
+                    std::string dump_str{ "\t\t" };
+                    for(auto const& byte : code) {
+                        char buffer[0x10];
+                        sprintf(buffer, "%02X ", byte);
+                        dump_str += buffer;
+                    }
 
-			char const* access = nullptr;
-			switch(dbgEvent.u.Exception.ExceptionRecord.ExceptionInformation[0])
-			{
-			case 0: access = "read from"; break;
-			case 1: access = "write to"; break;
-			case 8: access = "execute"; break;
-			}
+                    Log::WriteLine(dump_str.c_str());
+                    Log::WriteLine();*/
 
-			Log::WriteLine("\tThe process tried to %s 0x%08X.",
-				access,
-				dbgEvent.u.Exception.ExceptionRecord.ExceptionInformation[1]);
+                    // patch original code
+                    auto const p_original_code = static_cast<BYTE*>(it.first);
 
-			CONTEXT context;
-			context.ContextFlags = CONTEXT_FULL;
-			GetThreadContext(currentThread, &context);
+                    auto const rel2 = RelativeOffset(p_original_code + 5, base);
+                    code.assign(overridden_len, NOP);
+                    ApplyPatch(code.data(), jmp);
+                    ApplyPatch(code.data() + 0x01, rel2);
 
-			Log::WriteLine();
-			Log::WriteLine("Registers:");
-			Log::WriteLine("\tEAX = 0x%08X\tECX = 0x%08X\tEDX = 0x%08X",
-				context.Eax, context.Ecx, context.Edx);
-			Log::WriteLine("\tEBX = 0x%08X\tESP = 0x%08X\tEBP = 0x%08X",
-				context.Ebx, context.Esp, context.Ebp);
-			Log::WriteLine("\tESI = 0x%08X\tEDI = 0x%08X\tEIP = 0x%08X",
-				context.Esi, context.Edi, context.Eip);
-			Log::WriteLine();
+                    if (!PatchCode(p_original_code, code.data(), static_cast<DWORD>(code.size())))
+                    {
+                        throw_lasterror_or(ERROR_ERRORS_ENCOUNTERED, exe);
+                    }
+                }
 
-			Log::WriteLine("\tStack dump:");
-			auto const esp = reinterpret_cast<DWORD*>(context.Esp);
-			for(auto p = esp; p < &esp[0x100]; ++p) {
-				DWORD dw;
-				if(ReadMem(p, &dw, 4)) {
-					Log::WriteLine("\t0x%08X:\t0x%08X", p, dw);
-				} else {
-					Log::WriteLine("\t0x%08X:\t(could not be read)", p);
-				}
-			}
-			Log::WriteLine();
+                Log::Flush();
+
+                bHooksCreated = true;
+            }
+
+            // restore
+            if (!PatchCode(exceptAddr, &Breakpoints[exceptAddr].original_opcode, 1))
+            {
+                throw_lasterror_or(ERROR_ERRORS_ENCOUNTERED, exe);
+            }
+
+            // single step mode
+            context.EFlags |= 0x100;
+            --context.Eip;
+
+            context.ContextFlags = CONTEXT_CONTROL;
+            SetThreadContext(currentThread, &context);
+
+            threadInfo.lastBP = exceptAddr;
+
+            return DBG_CONTINUE;
+        }
+        else
+        {
+            // could be a Debugger class breakpoint to call a patching function!
+
+            context.ContextFlags = CONTEXT_CONTROL;
+            SetThreadContext(currentThread, &context);
+
+            return DBG_EXCEPTION_NOT_HANDLED;
+        }
+    }
+    else if (exceptCode == EXCEPTION_SINGLE_STEP)
+    {
+        auto const buffer = INT3;
+        auto const& threadInfo = Threads[dbgEvent.dwThreadId];
+        if (!PatchCode(threadInfo.lastBP, &buffer, 1))
+        {
+            throw_lasterror_or(ERROR_ERRORS_ENCOUNTERED, exe);
+        }
+
+        HANDLE hThread = threadInfo.Thread;
+        CONTEXT context;
+
+        context.ContextFlags = CONTEXT_CONTROL;
+        GetThreadContext(hThread, &context);
+
+        context.EFlags &= ~0x100;
+
+        context.ContextFlags = CONTEXT_CONTROL;
+        SetThreadContext(hThread, &context);
+
+        return DBG_CONTINUE;
+    }
+    else
+    {
+        Log::WriteLine(
+            __FUNCTION__ ": Exception (Code: 0x%08X at 0x%08X)!", exceptCode,
+            exceptAddr);
+
+        if (!bAVLogged)
+        {
+            // Log::WriteLine(__FUNCTION__ ": ACCESS VIOLATION at 0x%08X!", exceptAddr);
+            auto const& threadInfo = Threads[dbgEvent.dwThreadId];
+            HANDLE currentThread = threadInfo.Thread;
+
+            char const* access = nullptr;
+            switch (dbgEvent.u.Exception.ExceptionRecord.ExceptionInformation[0])
+            {
+            case 0:
+                access = "read from";
+                break;
+            case 1:
+                access = "write to";
+                break;
+            case 8:
+                access = "execute";
+                break;
+            }
+
+            Log::WriteLine("\tThe process tried to %s 0x%08X.",
+                access,
+                dbgEvent.u.Exception.ExceptionRecord.ExceptionInformation[1]);
+
+            CONTEXT context;
+            context.ContextFlags = CONTEXT_FULL;
+            GetThreadContext(currentThread, &context);
+
+            Log::WriteLine();
+            Log::WriteLine("Registers:");
+            Log::WriteLine("\tEAX = 0x%08X\tECX = 0x%08X\tEDX = 0x%08X",
+                context.Eax, context.Ecx, context.Edx);
+            Log::WriteLine("\tEBX = 0x%08X\tESP = 0x%08X\tEBP = 0x%08X",
+                context.Ebx, context.Esp, context.Ebp);
+            Log::WriteLine("\tESI = 0x%08X\tEDI = 0x%08X\tEIP = 0x%08X",
+                context.Esi, context.Edi, context.Eip);
+            Log::WriteLine();
+
+            Log::WriteLine("\tStack dump:");
+            auto const esp = reinterpret_cast<DWORD*>(context.Esp);
+            for (auto p = esp; p < &esp[0x100]; ++p)
+            {
+                DWORD dw;
+                if (ReadMem(p, &dw, 4))
+                {
+                    Log::WriteLine("\t0x%08X:\t0x%08X", p, dw);
+                }
+                else
+                {
+                    Log::WriteLine("\t0x%08X:\t(could not be read)", p);
+                }
+            }
+            Log::WriteLine();
 
 #if 0
-			Log::WriteLine("Making crash dump:\n");
-			MINIDUMP_EXCEPTION_INFORMATION expParam;
-			expParam.ThreadId = dbgEvent.dwThreadId;
-			EXCEPTION_POINTERS ep;
-			ep.ExceptionRecord = const_cast<PEXCEPTION_RECORD>(&dbgEvent.u.Exception.ExceptionRecord);
-			ep.ContextRecord = &context;
-			expParam.ExceptionPointers = &ep;
-			expParam.ClientPointers = FALSE;
+            Log::WriteLine("Making crash dump:\n");
+            MINIDUMP_EXCEPTION_INFORMATION expParam;
+            expParam.ThreadId = dbgEvent.dwThreadId;
+            EXCEPTION_POINTERS ep;
+            ep.ExceptionRecord = const_cast<PEXCEPTION_RECORD>(&dbgEvent.u.Exception.ExceptionRecord);
+            ep.ContextRecord = &context;
+            expParam.ExceptionPointers = &ep;
+            expParam.ClientPointers = FALSE;
 
-			wchar_t filename[MAX_PATH];
-			wchar_t path[MAX_PATH];
-			SYSTEMTIME time;
+            wchar_t filename[MAX_PATH];
+            wchar_t path[MAX_PATH];
+            SYSTEMTIME time;
 
-			GetLocalTime(&time);
-			GetCurrentDirectoryW(MAX_PATH, path);
+            GetLocalTime(&time);
+            GetCurrentDirectoryW(MAX_PATH, path);
 
-			swprintf(filename, MAX_PATH, L"%s\\syringe.crashed.%04u%02u%02u-%02u%02u%02u.dmp",
-				path, time.wYear, time.wMonth, time.wDay, time.wHour, time.wMinute, time.wSecond);
+            swprintf(filename, MAX_PATH, L"%s\\syringe.crashed.%04u%02u%02u-%02u%02u%02u.dmp",
+                path, time.wYear, time.wMonth, time.wDay, time.wHour, time.wMinute, time.wSecond);
 
-			HANDLE dumpFile = CreateFileW(filename, GENERIC_READ | GENERIC_WRITE,
-				FILE_SHARE_WRITE | FILE_SHARE_READ, nullptr, CREATE_ALWAYS, FILE_FLAG_WRITE_THROUGH, nullptr);
+            HANDLE dumpFile = CreateFileW(filename, GENERIC_READ | GENERIC_WRITE,
+                FILE_SHARE_WRITE | FILE_SHARE_READ, nullptr, CREATE_ALWAYS, FILE_FLAG_WRITE_THROUGH, nullptr);
 
-			MINIDUMP_TYPE type = (MINIDUMP_TYPE)MiniDumpWithFullMemory;
+            MINIDUMP_TYPE type = (MINIDUMP_TYPE)MiniDumpWithFullMemory;
 
-			MiniDumpWriteDump(pInfo.hProcess, dbgEvent.dwProcessId, dumpFile, type, &expParam, nullptr, nullptr);
-			CloseHandle(dumpFile);
+            MiniDumpWriteDump(pInfo.hProcess, dbgEvent.dwProcessId, dumpFile, type, &expParam, nullptr, nullptr);
+            CloseHandle(dumpFile);
 
-			Log::WriteLine("Crash dump generated.\n");
+            Log::WriteLine("Crash dump generated.\n");
 #endif
 
-			bAVLogged = true;
-		}
+            bAVLogged = true;
+        }
 
-		return DBG_EXCEPTION_NOT_HANDLED;
-	}
+        return DBG_EXCEPTION_NOT_HANDLED;
+    }
 
-	return DBG_CONTINUE;
 }
 
 void SyringeDebugger::Run(std::string_view const arguments)
 {
-	constexpr auto AllocDataSize = sizeof(AllocData);
+    Log::WriteLine(
+        __FUNCTION__ ": Running process to debug. cmd = \"%s %.*s\"",
+        exe.c_str(), printable(arguments));
+    DebugProcess(arguments);
 
-	Log::WriteLine(
-		__FUNCTION__ ": Running process to debug. cmd = \"%s %.*s\"",
-		exe.c_str(), printable(arguments));
-	DebugProcess(arguments);
+    // write DLL loader code
+    Log::WriteLine(__FUNCTION__ ": Writing DLL loader & caller code...");
 
-	Log::WriteLine(__FUNCTION__ ": Allocating 0x%u bytes...", AllocDataSize);
-	pAlloc = AllocMem(nullptr, AllocDataSize);
+    static constexpr BYTE cLoadLibrary[] = {
+        0x50,								// push eax
+        0x51,								// push ecx
+        0x52,								// push edx
+        0x68, INIT, INIT, INIT, INIT,		// push offset pdLibName
+        0xFF, 0x15, INIT, INIT, INIT, INIT, // call pImLoadLibrary
+        0x85, 0xC0,							// test eax, eax
+        0x74, 0x0C,							// jz
+        0x68, INIT, INIT, INIT, INIT,		// push offset pdProcName
+        0x50,								// push eax
+        0xFF, 0x15, INIT, INIT, INIT, INIT, // call pdImGetProcAddress
+        0xA3, INIT, INIT, INIT, INIT,		// mov pdProcAddress, eax
+        0x5A,								// pop edx
+        0x59,								// pop ecx
+        0x58,								// pop eax
+        INT3, NOP							// int3 and some padding
+    };
 
-	Log::WriteLine(__FUNCTION__ ": pAlloc = 0x%08X", pAlloc.get());
+    auto code = std::to_array(cLoadLibrary);
+    pLoaderCode = AllocMem(nullptr, code.size());
+    pExchangeData = AllocMem(nullptr, sizeof(ExchangeData));
 
-	// write DLL loader code
-	Log::WriteLine(__FUNCTION__ ": Writing DLL loader & caller code...");
+    ApplyPatch(code.data() + 0x04, &GetData()->LibName);
+    ApplyPatch(code.data() + 0x0A, pImLoadLibrary);
+    ApplyPatch(code.data() + 0x13, &GetData()->ProcName);
+    ApplyPatch(code.data() + 0x1A, pImGetProcAddress);
+    ApplyPatch(code.data() + 0x1F, &GetData()->ProcAddress);
+    if (!PatchMem(pLoaderCode, code.data(), code.size()))
+    {
+        throw_lasterror_or(ERROR_ERRORS_ENCOUNTERED, exe);
+    }
+    MakeExecutable(pLoaderCode, code.size());
 
-	static BYTE const cLoadLibrary[] = {
-		0x50, // push eax
-		0x51, // push ecx
-		0x52, // push edx
-		0x68, INIT, INIT, INIT, INIT, // push offset pdLibName
-		0xFF, 0x15, INIT, INIT, INIT, INIT, // call pImLoadLibrary
-		0x85, 0xC0, // test eax, eax
-		0x74, 0x0C, // jz
-		0x68, INIT, INIT, INIT, INIT, // push offset pdProcName
-		0x50, // push eax
-		0xFF, 0x15, INIT, INIT, INIT, INIT, // call pdImGetProcAddress
-		0xA3, INIT, INIT, INIT, INIT, // mov pdProcAddress, eax
-		0x5A, // pop edx
-		0x59, // pop ecx
-		0x58, // pop eax
-		INT3, NOP // int3 and some padding
-	};
+    Log::WriteLine(__FUNCTION__ ": pcLoadLibrary = 0x%08X", GetLoaderCode());
 
-	std::array<BYTE, AllocDataSize> data;
-	static_assert(AllocData::CodeSize >= sizeof(cLoadLibrary));
-	ApplyPatch(data.data(), cLoadLibrary);
-	ApplyPatch(data.data() + 0x04, &GetData()->LibName);
-	ApplyPatch(data.data() + 0x0A, pImLoadLibrary);
-	ApplyPatch(data.data() + 0x13, &GetData()->ProcName);
-	ApplyPatch(data.data() + 0x1A, pImGetProcAddress);
-	ApplyPatch(data.data() + 0x1F, &GetData()->ProcAddress);
-	PatchMem(pAlloc, data.data(), data.size());
+    // breakpoints for DLL loading and proc address retrieving
+    bDLLsLoaded = false;
+    bHooksCreated = false;
+    bFeaturesSet = false;
+    loop_LoadLibrary = v_AllHooks.end();
 
-	Log::WriteLine(__FUNCTION__ ": pcLoadLibrary = 0x%08X", &GetData()->LoadLibraryFunc);
+    // set breakpoint
+    if (!SetBP(pcEntryPoint))
+    {
+        throw_lasterror_or(ERROR_ERRORS_ENCOUNTERED, exe);
+    }
 
-	// breakpoints for DLL loading and proc address retrieving
-	bDLLsLoaded = false;
-	bHooksCreated = false;
-	loop_LoadLibrary = v_AllHooks.end();
+    DEBUG_EVENT dbgEvent;
+    ResumeThread(pInfo.hThread);
 
-	// set breakpoint
-	SetBP(pcEntryPoint);
+    bAVLogged = false;
 
-	DEBUG_EVENT dbgEvent;
-	ResumeThread(pInfo.hThread);
+    Log::WriteLine(__FUNCTION__ ": Entering debug loop...");
 
-	bAVLogged = false;
+    auto exit_code = static_cast<DWORD>(-1);
 
-	Log::WriteLine(__FUNCTION__ ": Entering debug loop...");
+    while (true)
+    {
+        WaitForDebugEvent(&dbgEvent, INFINITE);
 
-	auto exit_code = static_cast<DWORD>(-1);
+        DWORD continueStatus = DBG_CONTINUE;
+        bool wasSingleStep = false;
 
-	for(;;)
-	{
-		WaitForDebugEvent(&dbgEvent, INFINITE);
+        switch (dbgEvent.dwDebugEventCode)
+        {
+        case CREATE_PROCESS_DEBUG_EVENT:
+            workingHandle = dbgEvent.u.CreateProcessInfo.hProcess;
+            Threads.emplace(dbgEvent.dwThreadId, dbgEvent.u.CreateProcessInfo.hThread);
+            CloseHandle(dbgEvent.u.CreateProcessInfo.hFile);
+            break;
 
-		DWORD continueStatus = DBG_CONTINUE;
-		bool wasBP = false;
+        case CREATE_THREAD_DEBUG_EVENT:
+            Threads.emplace(dbgEvent.dwThreadId, dbgEvent.u.CreateThread.hThread);
+            break;
 
-		switch(dbgEvent.dwDebugEventCode)
-		{
-		case CREATE_PROCESS_DEBUG_EVENT:
-			pInfo.hProcess = dbgEvent.u.CreateProcessInfo.hProcess;
-			pInfo.dwThreadId = dbgEvent.dwProcessId;
-			pInfo.hThread = dbgEvent.u.CreateProcessInfo.hThread;
-			pInfo.dwThreadId = dbgEvent.dwThreadId;
-			Threads.emplace(dbgEvent.dwThreadId, dbgEvent.u.CreateProcessInfo.hThread);
-			CloseHandle(dbgEvent.u.CreateProcessInfo.hFile);
-			break;
+        case EXIT_THREAD_DEBUG_EVENT:
+            if (auto const it = Threads.find(dbgEvent.dwThreadId); it != Threads.end())
+            {
+                it->second.Thread.release();
+                Threads.erase(it);
+            }
+            break;
 
-		case CREATE_THREAD_DEBUG_EVENT:
-			Threads.emplace(dbgEvent.dwThreadId, dbgEvent.u.CreateThread.hThread);
-			break;
+        case EXCEPTION_DEBUG_EVENT:
+            continueStatus = HandleException(dbgEvent);
+            wasSingleStep = (dbgEvent.u.Exception.ExceptionRecord.ExceptionCode == EXCEPTION_SINGLE_STEP);
+            break;
 
-		case EXIT_THREAD_DEBUG_EVENT:
-			if(auto const it = Threads.find(dbgEvent.dwThreadId); it != Threads.end())
-			{
-				it->second.Thread.release();
-				Threads.erase(it);
-			}
-			break;
+        case LOAD_DLL_DEBUG_EVENT:
+            CloseHandle(dbgEvent.u.LoadDll.hFile);
+            break;
 
-		case EXCEPTION_DEBUG_EVENT:
-			continueStatus = HandleException(dbgEvent);
-			wasBP = (dbgEvent.u.Exception.ExceptionRecord.ExceptionCode == EXCEPTION_BREAKPOINT);
-			break;
+        case OUTPUT_DEBUG_STRING_EVENT:
+            break;
+        }
 
-		case LOAD_DLL_DEBUG_EVENT:
-			CloseHandle(dbgEvent.u.LoadDll.hFile);
-			break;
+        if (dbgEvent.dwDebugEventCode == EXIT_PROCESS_DEBUG_EVENT)
+        {
+            exit_code = dbgEvent.u.ExitProcess.dwExitCode;
+            ContinueDebugEvent(dbgEvent.dwProcessId, dbgEvent.dwThreadId, continueStatus);
+            break;
+        }
+        else if (dbgEvent.dwDebugEventCode == RIP_EVENT)
+        {
+            ContinueDebugEvent(dbgEvent.dwProcessId, dbgEvent.dwThreadId, continueStatus);
+            break;
+        }
 
-		case OUTPUT_DEBUG_STRING_EVENT:
-			break;
-		}
+        ContinueDebugEvent(dbgEvent.dwProcessId, dbgEvent.dwThreadId, continueStatus);
 
-		if(dbgEvent.dwDebugEventCode == EXIT_PROCESS_DEBUG_EVENT) {
-			exit_code = dbgEvent.u.ExitProcess.dwExitCode;
-			break;
-		} else if(dbgEvent.dwDebugEventCode == RIP_EVENT) {
-			break;
-		}
+        if (bDetachWhenDone && bHooksCreated && wasSingleStep)
+        {
+            Log::WriteLine(__FUNCTION__ ": Hooks placed, detaching debugger.");
 
-		ContinueDebugEvent(dbgEvent.dwProcessId, dbgEvent.dwThreadId, continueStatus);
-	}
+            if (!DebugActiveProcessStop(dbgEvent.dwProcessId))
+                Log::WriteLine(__FUNCTION__ ": DebugActiveProcessStop failed (%u).", GetLastError());
 
-	CloseHandle(pInfo.hProcess);
+            break;
+        }
+    }
 
-	Log::WriteLine(
-		__FUNCTION__ ": Done with exit code %X (%u).", exit_code, exit_code);
-	Log::WriteLine();
+    workingHandle = nullptr;
+
+    if (bWaitForProcessEnd)
+    {
+        Log::WriteLine(__FUNCTION__ ": Waiting for process to exit...");
+
+        WaitForSingleObject(pInfo.hProcess, INFINITE);
+
+        if (!GetExitCodeProcess(pInfo.hProcess, &exit_code))
+        {
+            Log::WriteLine(__FUNCTION__ ": Failed to get process exit code!");
+        }
+    }
+
+    CloseHandle(pInfo.hProcess);
+
+    Log::WriteLine(
+        __FUNCTION__ ": Done with exit code %X (%u).", exit_code, exit_code);
+    Log::WriteLine();
 }
 
 void SyringeDebugger::RemoveBP(LPVOID const address, bool const restoreOpcode)
 {
-	if(auto const i = Breakpoints.find(address); i != Breakpoints.end()) {
-		if(restoreOpcode) {
-			PatchMem(address, &i->second.original_opcode, 1);
-		}
+    if (auto const i = Breakpoints.find(address); i != Breakpoints.end())
+    {
+        if (restoreOpcode)
+        {
+            if (!PatchCode(address, &i->second.original_opcode, 1))
+            {
+                throw_lasterror_or(ERROR_ERRORS_ENCOUNTERED, exe);
+            }
+        }
 
-		Breakpoints.erase(i);
-	}
+        Breakpoints.erase(i);
+    }
 }
 
 void SyringeDebugger::RetrieveInfo()
 {
-	Log::WriteLine(
-		__FUNCTION__ ": Retrieving info from the executable file...");
+    Log::WriteLine(
+        __FUNCTION__ ": Retrieving info from the executable file...");
 
-	try {
-		PortableExecutable pe{ exe };
-		auto const dwImageBase = pe.GetImageBase();
+    try
+    {
+        PortableExecutable pe{ exe };
+        auto const dwImageBase = pe.GetImageBase();
 
-		// creation time stamp
-		dwTimeStamp = pe.GetPEHeader().FileHeader.TimeDateStamp;
+        // creation time stamp
+        dwTimeStamp = pe.GetPEHeader().FileHeader.TimeDateStamp;
 
-		// entry point
-		pcEntryPoint = reinterpret_cast<void*>(dwImageBase + pe.GetPEHeader().OptionalHeader.AddressOfEntryPoint);
+        // entry point
+        pcEntryPoint = reinterpret_cast<void*>(dwImageBase + pe.GetPEHeader().OptionalHeader.AddressOfEntryPoint);
 
-		// get imports
-		pImLoadLibrary = nullptr;
-		pImGetProcAddress = nullptr;
+        // get imports
+        pImLoadLibrary = nullptr;
+        pImGetProcAddress = nullptr;
 
-		for(auto const& import : pe.GetImports()) {
-			if(_strcmpi(import.Name.c_str(), "KERNEL32.DLL") == 0) {
-				for(auto const& thunk : import.vecThunkData) {
-					if(_strcmpi(thunk.Name.c_str(), "GETPROCADDRESS") == 0) {
-						pImGetProcAddress = reinterpret_cast<void*>(dwImageBase + thunk.Address);
-					} else if(_strcmpi(thunk.Name.c_str(), "LOADLIBRARYA") == 0) {
-						pImLoadLibrary = reinterpret_cast<void*>(dwImageBase + thunk.Address);
-					}
-				}
-			}
-		}
-	} catch(...) {
-		Log::WriteLine(__FUNCTION__ ": Failed to open the executable!");
+        for (auto const& import : pe.GetImports())
+        {
+            if (_strcmpi(import.Name.c_str(), "KERNEL32.DLL") == 0)
+            {
+                for (auto const& thunk : import.vecThunkData)
+                {
+                    if (_strcmpi(thunk.Name.c_str(), "GETPROCADDRESS") == 0)
+                    {
+                        pImGetProcAddress = reinterpret_cast<void*>(dwImageBase + thunk.Address);
+                    }
+                    else if (_strcmpi(thunk.Name.c_str(), "LOADLIBRARYA") == 0)
+                    {
+                        pImLoadLibrary = reinterpret_cast<void*>(dwImageBase + thunk.Address);
+                    }
+                }
+            }
+        }
+    }
+    catch (...)
+    {
+        Log::WriteLine(__FUNCTION__ ": Failed to open the executable!");
 
-		throw;
-	}
+        throw;
+    }
 
-	if(!pImGetProcAddress || !pImLoadLibrary) {
-		Log::WriteLine(
-			__FUNCTION__ ": ERROR: Either a LoadLibraryA or a GetProcAddress "
-			"import could not be found!");
+    if (!pImGetProcAddress || !pImLoadLibrary)
+    {
+        Log::WriteLine(
+            __FUNCTION__ ": ERROR: Either a LoadLibraryA or a GetProcAddress "
+            "import could not be found!");
 
-		throw_lasterror_or(ERROR_PROC_NOT_FOUND, exe);
-	}
+        throw_lasterror_or(ERROR_PROC_NOT_FOUND, exe);
+    }
 
-	// read meta information: size and checksum
-	if(ifstream is{ exe, ifstream::binary }) {
-		is.seekg(0, ifstream::end);
-		dwExeSize = static_cast<DWORD>(is.tellg());
-		is.seekg(0, ifstream::beg);
+    // read meta information: size and checksum
+    if (ifstream is{ exe, ifstream::binary })
+    {
+        is.seekg(0, ifstream::end);
+        dwExeSize = static_cast<DWORD>(is.tellg());
+        is.seekg(0, ifstream::beg);
 
-		CRC32 crc;
-		char buffer[0x1000];
-		while(auto const read = is.read(buffer, std::size(buffer)).gcount()) {
-			crc.compute(buffer, read);
-		}
-		dwExeCRC = crc.value();
-	}
+        CRC32 crc;
+        char buffer[0x1000];
+        while (auto const read = is.read(buffer, std::size(buffer)).gcount())
+        {
+            crc.compute(buffer, read);
+        }
+        dwExeCRC = crc.value();
+    }
 
-	Log::WriteLine(__FUNCTION__ ": Executable information successfully retrieved.");
-	Log::WriteLine("\texe = %s", exe.c_str());
-	Log::WriteLine("\tpImLoadLibrary = 0x%08X", pImLoadLibrary);
-	Log::WriteLine("\tpImGetProcAddress = 0x%08X", pImGetProcAddress);
-	Log::WriteLine("\tpcEntryPoint = 0x%08X", pcEntryPoint);
-	Log::WriteLine("\tdwExeSize = 0x%08X", dwExeSize);
-	Log::WriteLine("\tdwExeCRC = 0x%08X", dwExeCRC);
-	Log::WriteLine("\tdwTimestamp = 0x%08X", dwTimeStamp);
-	Log::WriteLine();
+    Log::WriteLine(__FUNCTION__ ": Executable information successfully retrieved.");
+    Log::WriteLine("\texe = %s", exe.c_str());
+    Log::WriteLine("\tpImLoadLibrary = 0x%08X", pImLoadLibrary);
+    Log::WriteLine("\tpImGetProcAddress = 0x%08X", pImGetProcAddress);
+    Log::WriteLine("\tpcEntryPoint = 0x%08X", pcEntryPoint);
+    Log::WriteLine("\tdwExeSize = 0x%08X", dwExeSize);
+    Log::WriteLine("\tdwExeCRC = 0x%08X", dwExeCRC);
+    Log::WriteLine("\tdwTimestamp = 0x%08X", dwTimeStamp);
+    Log::WriteLine();
 
-	Log::WriteLine(__FUNCTION__ ": Opening %s to determine imports.", exe.c_str());
+    Log::WriteLine(__FUNCTION__ ": Opening %s to determine imports.", exe.c_str());
 }
 
 void SyringeDebugger::FindDLLs()
 {
-	Breakpoints.clear();
+    Breakpoints.clear();
 
-	for (const auto& dll : dlls) {
-		Log::WriteLine(__FUNCTION__ ": Searching for DLLs matching \"%s\"...", dll.c_str());
+    for (const auto& dll : dlls)
+    {
+        Log::WriteLine(__FUNCTION__ ": Searching for DLLs matching \"%s\"...", dll.c_str());
 
-		for(auto file = FindFile(dll.c_str()); file; ++file) {
-			std::string_view const fn(file->cFileName);
+        for (auto file = FindFile(dll.c_str()); file; ++file)
+        {
+            std::string_view const fn(file->cFileName);
 
-			//Log::WriteLine(
-			//	__FUNCTION__ ": Potential DLL: \"%.*s\"", printable(fn));
+            // Log::WriteLine(
+            //	__FUNCTION__ ": Potential DLL: \"%.*s\"", printable(fn));
 
-			try {
-				PortableExecutable const DLL{ fn };
-				HookBuffer buffer;
+            try
+            {
+                PortableExecutable const DLL{ fn };
+                HookBuffer buffer;
 
-				auto canLoad = false;
-				if(auto const hooks = DLL.FindSection(".syhks00")) {
-					canLoad = ParseHooksSection(DLL, *hooks, buffer);
-				} else {
-					canLoad = ParseInjFileHooks(fn, buffer);
-				}
+                auto canLoad = false;
+                if (auto const hooks = DLL.FindSection(".syhks00"))
+                {
+                    canLoad = ParseHooksSection(DLL, *hooks, buffer);
+                }
+                else
+                {
+                    canLoad = ParseInjFileHooks(fn, buffer);
+                }
 
-				if(canLoad) {
-					Log::WriteLine(
-						__FUNCTION__ ": Recognized DLL: \"%.*s\"", printable(fn));
+                if (canLoad)
+                {
+                    Log::WriteLine(__FUNCTION__ ": Recognized DLL: \"%.*s\"", printable(fn));
 
-					if(auto const res = Handshake(
-						DLL.GetFilename(), static_cast<int>(buffer.count),
-						buffer.checksum.value()))
-					{
-						canLoad = *res;
-					} else if(auto const hosts = DLL.FindSection(".syexe00")) {
-						canLoad = CanHostDLL(DLL, *hosts);
-					}
-				}
+                    if (auto const res = Handshake(DLL.GetFilename(), static_cast<int>(buffer.count), buffer.checksum.value()))
+                    {
+                        canLoad = *res;
+                    }
+                    else if (auto const hosts = DLL.FindSection(".syexe00"))
+                    {
+                        canLoad = CanHostDLL(DLL, *hosts);
+                    }
+                }
 
-				if(canLoad) {
-					for(auto const& it : buffer.hooks) {
-						auto const eip = it.first;
-						auto& h = Breakpoints[eip];
-						h.p_caller_code.clear();
-						h.original_opcode = 0x00;
-						h.hooks.insert(
-							h.hooks.end(), it.second.begin(), it.second.end());
-					}
-				} else if(!buffer.hooks.empty()) {
-					Log::WriteLine(
-						__FUNCTION__ ": DLL load was prevented: \"%.*s\"",
-						printable(fn));
-				}
-			} catch(...) {
-				//Log::WriteLine(
-				//	__FUNCTION__ ": DLL Parse failed: \"%.*s\"", printable(fn));
-			}
-		}
-	}
+                if (canLoad)
+                {
+                    for (auto const& it : buffer.hooks)
+                    {
+                        auto const eip = it.first;
+                        auto& h = Breakpoints[eip];
+                        h.p_caller_code.clear();
+                        h.original_opcode = 0x00;
+                        h.hooks.insert(
+                            h.hooks.end(), it.second.begin(), it.second.end());
+                    }
+                }
+                else if (!buffer.hooks.empty())
+                {
+                    Log::WriteLine(__FUNCTION__ ": DLL load was prevented: \"%.*s\"", printable(fn));
+                }
+            }
+            catch (...)
+            {
+                // Log::WriteLine(
+                //	__FUNCTION__ ": DLL Parse failed: \"%.*s\"", printable(fn));
+            }
+        }
+    }
 
-	// summarize all hooks
-	v_AllHooks.clear();
-	for(auto& it : Breakpoints) {
-		for(auto& i : it.second.hooks) {
-			v_AllHooks.push_back(&i);
-		}
-	}
+    // summarize all hooks
+    v_AllHooks.clear();
+    for (auto& it : Breakpoints)
+    {
+        for (auto& i : it.second.hooks)
+        {
+            v_AllHooks.push_back(&i);
+        }
+    }
 
-	Log::WriteLine(__FUNCTION__ ": Done (%d hooks added).", v_AllHooks.size());
-	Log::WriteLine();
+    Log::WriteLine(__FUNCTION__ ": Done (%d hooks added).", v_AllHooks.size());
+
+    // build feature flag entries for each unique DLL
+    v_FeatureFlags.clear();
+    {
+        std::set<std::string> uniqueLibs;
+        for (auto const& hook : v_AllHooks)
+        {
+            if (uniqueLibs.insert(hook->lib).second)
+            {
+                for (auto const& flagName : FeatureFlagNames)
+                {
+                    FeatureFlagEntry entry{};
+                    strncpy_s(entry.lib, hook->lib, MaxNameLength - 1);
+                    flagName.copy(entry.symbol, MaxNameLength - 1);
+                    v_FeatureFlags.push_back(entry);
+                }
+            }
+        }
+    }
+
+    Log::WriteLine(
+        __FUNCTION__ ": %d feature flag entries prepared.",
+        v_FeatureFlags.size());
+    Log::WriteLine();
 }
 
 bool SyringeDebugger::ParseInjFileHooks(
-	std::string_view const lib, HookBuffer& hooks)
+    std::string_view const lib, HookBuffer& hooks)
 {
-	auto const inj = std::string(lib) + ".inj";
+    auto const inj = std::string(lib) + ".inj";
 
-	if(auto const file = FileHandle(_fsopen(inj.c_str(), "r", _SH_DENYWR))) {
-		constexpr auto Size = 0x100;
-		char line[Size];
-		while(fgets(line, Size, file)) {
-			if(*line != ';' && *line != '\r' && *line != '\n') {
-				void* eip = nullptr;
-				auto n_over = 0u;
-				char func[MaxNameLength];
-				func[0] = '\0';
+    if (auto const file = FileHandle(_fsopen(inj.c_str(), "r", _SH_DENYWR)))
+    {
+        constexpr auto Size = 0x100;
+        char line[Size];
+        while (fgets(line, Size, file))
+        {
+            if (*line != ';' && *line != '\r' && *line != '\n')
+            {
+                void* eip = nullptr;
+                auto n_over = 0u;
+                char func[MaxNameLength];
+                func[0] = '\0';
 
-				// parse the line (length is optional, defaults to 0)
-				if(sscanf_s(
-					line, "%p = %[^ \t;,\r\n] , %x", &eip, func,
-					static_cast<unsigned int>(MaxNameLength), &n_over) >= 2)
-				{
-					hooks.add(eip, lib, func, static_cast<size_t>(n_over));
-				}
-			}
-		}
+                // parse the line (length is optional, defaults to 0)
+                if (sscanf_s(
+                    line, "%p = %[^ \t;,\r\n] , %x", &eip, func,
+                    static_cast<unsigned int>(MaxNameLength), &n_over) >= 2)
+                {
+                    hooks.add(eip, lib, func, static_cast<size_t>(n_over));
+                }
+            }
+        }
 
-		return true;
-	}
+        return true;
+    }
 
-	return false;
+    return false;
 }
 
 bool SyringeDebugger::CanHostDLL(
-	PortableExecutable const& DLL, IMAGE_SECTION_HEADER const& hosts) const
+    PortableExecutable const& DLL, IMAGE_SECTION_HEADER const& hosts) const
 {
-	constexpr auto const Size = sizeof(hostdecl);
-	auto const base = DLL.GetImageBase();
+    constexpr auto const Size = sizeof(hostdecl);
+    auto const base = DLL.GetImageBase();
 
-	auto const begin = hosts.PointerToRawData;
-	auto const end = begin + hosts.SizeOfRawData;
+    auto const begin = hosts.PointerToRawData;
+    auto const end = begin + hosts.SizeOfRawData;
 
-	std::string hostName;
-	for(auto ptr = begin; ptr < end; ptr += Size) {
-		hostdecl h;
-		if(DLL.ReadBytes(ptr, Size, &h)) {
-			if(h.hostNamePtr) {
-				auto const rawNamePtr = DLL.VirtualToRaw(h.hostNamePtr - base);
-				if(DLL.ReadCString(rawNamePtr, hostName)) {
-					hostName += ".exe";
-					if(!_strcmpi(hostName.c_str(), exe.c_str())) {
-						return true;
-					}
-				}
-			}
-		} else {
-			break;
-		}
-	}
-	return false;
+    std::string hostName;
+    for (auto ptr = begin; ptr < end; ptr += Size)
+    {
+        hostdecl h;
+        if (DLL.ReadBytes(ptr, Size, &h))
+        {
+            if (h.hostNamePtr)
+            {
+                auto const rawNamePtr = DLL.VirtualToRaw(h.hostNamePtr - base);
+                if (DLL.ReadCString(rawNamePtr, hostName))
+                {
+                    hostName += ".exe";
+                    if (!_strcmpi(hostName.c_str(), exe.c_str()))
+                    {
+                        return true;
+                    }
+                }
+            }
+        }
+        else
+        {
+            break;
+        }
+    }
+    return false;
 }
 
 bool SyringeDebugger::ParseHooksSection(
-	PortableExecutable const& DLL, IMAGE_SECTION_HEADER const& hooks,
-	HookBuffer& buffer)
+    PortableExecutable const& DLL, IMAGE_SECTION_HEADER const& hooks,
+    HookBuffer& buffer)
 {
-	constexpr auto const Size = sizeof(hookdecl);
-	auto const base = DLL.GetImageBase();
-	auto const filename = std::string_view(DLL.GetFilename());
+    constexpr auto const Size = sizeof(hookdecl);
+    auto const base = DLL.GetImageBase();
+    auto const filename = std::string_view(DLL.GetFilename());
 
-	auto const begin = hooks.PointerToRawData;
-	auto const end = begin + hooks.SizeOfRawData;
+    auto const begin = hooks.PointerToRawData;
+    auto const end = begin + hooks.SizeOfRawData;
 
-	std::string hookName;
-	for(auto ptr = begin; ptr < end; ptr += Size) {
-		hookdecl h;
-		if(DLL.ReadBytes(ptr, Size, &h)) {
-			// msvc linker inserts arbitrary padding between variables that come
-			// from different translation units
-			if(h.hookNamePtr) {
-				auto const rawNamePtr = DLL.VirtualToRaw(h.hookNamePtr - base);
-				if(DLL.ReadCString(rawNamePtr, hookName)) {
-					auto const eip = reinterpret_cast<void*>(h.hookAddr);
-					buffer.add(eip, filename, hookName, h.hookSize);
-				}
-			}
-		} else {
-			Log::WriteLine(__FUNCTION__ ": Bytes read failed");
-			return false;
-		}
-	}
+    std::string hookName;
+    for (auto ptr = begin; ptr < end; ptr += Size)
+    {
+        hookdecl h;
+        if (DLL.ReadBytes(ptr, Size, &h))
+        {
+            // msvc linker inserts arbitrary padding between variables that come
+            // from different translation units
+            if (h.hookNamePtr)
+            {
+                auto const rawNamePtr = DLL.VirtualToRaw(h.hookNamePtr - base);
+                if (DLL.ReadCString(rawNamePtr, hookName))
+                {
+                    auto const eip = reinterpret_cast<void*>(h.hookAddr);
+                    buffer.add(eip, filename, hookName, h.hookSize);
+                }
+            }
+        }
+        else
+        {
+            Log::WriteLine(__FUNCTION__ ": Bytes read failed");
+            return false;
+        }
+    }
 
-	return true;
+    return true;
 }
 
 // check whether the library wants to be included. if it exports a special
@@ -799,42 +1329,54 @@ bool SyringeDebugger::ParseHooksSection(
 // the hooks aren't included. if the function is not exported, we have to
 // rely on other methods.
 std::optional<bool> SyringeDebugger::Handshake(
-	char const* const lib, int const hooks, unsigned int const crc)
+    char const* const lib, int const hooks, unsigned int const crc)
 {
-	std::optional<bool> ret;
+    std::optional<bool> ret;
 
-	if(auto const hLib = ModuleHandle(LoadLibrary(lib))) {
-		if(auto const func = reinterpret_cast<SYRINGEHANDSHAKEFUNC>(
-			GetProcAddress(hLib, "SyringeHandshake")))
-		{
-			Log::WriteLine(__FUNCTION__ ": Calling \"%s\" ...", lib);
-			constexpr auto Size = 0x100u;
-			std::vector<char> buffer(Size + 1); // one more than we tell the dll
+    if (!bHandshakes)
+    {
+        Log::WriteLine(__FUNCTION__ ": Skipping handshake for DLL: \"%s\"", lib);
+        return ret;
+    }
 
-			auto const shInfo = std::make_unique<SyringeHandshakeInfo>();
-			shInfo->cbSize = sizeof(SyringeHandshakeInfo);
-			shInfo->num_hooks = hooks;
-			shInfo->checksum = crc;
-			shInfo->exeFilesize = dwExeSize;
-			shInfo->exeTimestamp = dwTimeStamp;
-			shInfo->exeCRC = dwExeCRC;
-			shInfo->cchMessage = static_cast<int>(Size);
-			shInfo->Message = buffer.data();
+    if (auto const hLib = ModuleHandle(LoadLibrary(lib)))
+    {
+        if (auto const func = reinterpret_cast<SYRINGEHANDSHAKEFUNC>(
+            GetProcAddress(hLib, "SyringeHandshake")))
+        {
+            Log::WriteLine(__FUNCTION__ ": Calling \"%s\" ...", lib);
+            constexpr auto Size = 0x100u;
+            std::vector<char> buffer(Size + 1); // one more than we tell the dll
 
-			if(auto const res = func(shInfo.get()); SUCCEEDED(res)) {
-				buffer.back() = 0;
-				Log::WriteLine(
-					__FUNCTION__ ": Answers \"%s\" (%X)", buffer.data(), res);
-				ret = (res == S_OK);
-			} else {
-				// don't use any properties of shInfo.
-				Log::WriteLine(__FUNCTION__ ": Failed (%X)", res);
-				ret = false;
-			}
-		} else {
-			//Log::WriteLine(__FUNCTION__ ": Not available.");
-		}
-	}
+            auto const shInfo = std::make_unique<SyringeHandshakeInfo>();
+            shInfo->cbSize = sizeof(SyringeHandshakeInfo);
+            shInfo->num_hooks = hooks;
+            shInfo->checksum = crc;
+            shInfo->exeFilesize = dwExeSize;
+            shInfo->exeTimestamp = dwTimeStamp;
+            shInfo->exeCRC = dwExeCRC;
+            shInfo->cchMessage = static_cast<int>(Size);
+            shInfo->Message = buffer.data();
 
-	return ret;
+            if (auto const res = func(shInfo.get()); SUCCEEDED(res))
+            {
+                buffer.back() = 0;
+                Log::WriteLine(
+                    __FUNCTION__ ": Answers \"%s\" (%X)", buffer.data(), res);
+                ret = (res == S_OK);
+            }
+            else
+            {
+                // don't use any properties of shInfo.
+                Log::WriteLine(__FUNCTION__ ": Failed (%X)", res);
+                ret = false;
+            }
+        }
+        else
+        {
+            // Log::WriteLine(__FUNCTION__ ": Not available.");
+        }
+    }
+
+    return ret;
 }

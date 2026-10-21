@@ -6,6 +6,7 @@
 #include "PortableExecutable.h"
 #include "Log.h"
 
+#include <cstddef>
 #include <cstring>
 #include <iostream>
 #include <map>
@@ -15,190 +16,265 @@
 
 #include <windows.h>
 
+#pragma warning(push, 0)
+#include <Zydis/Decoder.h>
+#include <Zydis/DecoderTypes.h>
+#include <Zydis/Encoder.h>
+#include <Zydis/Utils.h>
+#pragma warning(pop)
+
 using std::operator""sv;
 
 class SyringeDebugger
 {
-	static constexpr size_t MaxNameLength = 0x100u;
+    static constexpr size_t MaxNameLength = 0x100u;
 
-	static constexpr BYTE INIT = 0x00;
-	static constexpr BYTE INT3 = 0xCC; // trap to debugger interrupt opcode.
-	static constexpr BYTE NOP = 0x90;
+    static constexpr BYTE INIT = 0x00;
+    static constexpr BYTE INT3 = 0xCC; // trap to debugger interrupt opcode.
+    static constexpr BYTE NOP = 0x90;
 
-	static constexpr std::string_view INCLUDE_FLAG = "-i=";
+    static constexpr std::string_view INCLUDE_FLAG = "-i=";
+    static constexpr std::string_view DETACH_FLAG = "--detach";
+    static constexpr std::string_view NODETACH_FLAG = "--nodetach";
+    static constexpr std::string_view NOWAIT_FLAG = "--nowait";
+    static constexpr std::string_view HANDSHAKES_FLAG = "--handshakes";
 
 public:
-	SyringeDebugger(std::string_view filename, std::string_view flags = "")
-		: exe(filename)
-	{
-		// parse all -i=filename_to_inject from flags
-		for (auto const flag : std::views::split(flags, " "sv)) {
-			auto const flagView = std::string_view{ flag.begin(), flag.end() };
-			auto const pos = flagView.find(INCLUDE_FLAG);
-			if(pos != std::string_view::npos) {
-				dlls.emplace_back(std::string { flagView.begin() + pos + INCLUDE_FLAG.size(),
-					flagView.end() });
-			} else {
-				Log::WriteLine(
-					__FUNCTION__ ": Unknown flag \"%.*s\", skipping.",
-					printable(flagView));
-			}
-		}
+    SyringeDebugger(std::string_view filename, std::vector<std::string> flags = {})
+        : exe(filename)
+    {
+        for (auto const& flag : flags)
+        {
+            std::string_view const flagView = flag;
 
-		if (dlls.empty()) {
-			dlls.emplace_back("*.dll");
-		}
+            // parse all -i=filename_to_inject from flags
+            if (auto const includePos = flagView.find(INCLUDE_FLAG);
+                includePos != std::string_view::npos)
+            {
+                dlls.emplace_back(
+                    flagView.begin() + includePos + INCLUDE_FLAG.size(), flagView.end());
+            }
+            else if (flagView.find(DETACH_FLAG) != std::string_view::npos)
+            {
+                bDetachWhenDone = true;
+            }
+            else if (flagView.find(NODETACH_FLAG) != std::string_view::npos)
+            {
+                bDetachWhenDone = false;
+            }
+            else if (flagView.find(NOWAIT_FLAG) != std::string_view::npos)
+            {
+                bWaitForProcessEnd = false;
+            }
+            else if (flagView.find(HANDSHAKES_FLAG) != std::string_view::npos)
+            {
+                bHandshakes = true;
+            }
+            else
+            {
+                Log::WriteLine(__FUNCTION__ ": Unknown flag \"%.*s\", skipping.", printable(flagView));
+            }
+        }
 
-		RetrieveInfo();
-	}
+        if (dlls.empty())
+        {
+            dlls.emplace_back("*.dll");
+        }
 
-	// debugger
-	void Run(std::string_view arguments);
-	DWORD HandleException(DEBUG_EVENT const& dbgEvent);
+        RetrieveInfo();
+    }
 
-	// breakpoints
-	bool SetBP(void* address);
-	void RemoveBP(LPVOID address, bool restoreOpcode);
+    // debugger
+    void Run(std::string_view arguments);
+    DWORD HandleException(DEBUG_EVENT const& dbgEvent);
 
-	// memory
-	VirtualMemoryHandle AllocMem(void* address, size_t size);
-	bool PatchMem(void* address, void const* buffer, DWORD size);
-	bool ReadMem(void const* address, void* buffer, DWORD size);
+    // breakpoints
+    bool SetBP(void* address);
+    void RemoveBP(LPVOID address, bool restoreOpcode);
 
-	// syringe
-	void FindDLLs();
+    // memory
+    VirtualMemoryHandle AllocMem(void* address, size_t size);
+    void MakeExecutable(VirtualMemoryHandle const& memory, size_t size);
+    bool PatchMem(void* address, void const* buffer, DWORD size);
+    bool PatchCode(void* address, void const* buffer, DWORD size);
+    bool ReadMem(void const* address, void* buffer, DWORD size);
+
+    // syringe
+    void FindDLLs();
 
 private:
-	void RetrieveInfo();
-	void DebugProcess(std::string_view arguments);
+    void RetrieveInfo();
+    void DebugProcess(std::string_view arguments);
 
-	// helper Functions
-	static DWORD __fastcall RelativeOffset(void const* from, void const* to);
+    // helper Functions
+    static DWORD __fastcall RelativeOffset(void const* from, void const* to);
 
-	template<typename T>
-	static void ApplyPatch(void* ptr, T&& data) noexcept
-	{
-		std::memcpy(ptr, &data, sizeof(data));
-	}
+#ifdef SYRINGE_TESTING
+public:
+#endif
+    static std::vector<BYTE> RebuildInstructions(
+        BYTE const* bytes, size_t size, DWORD originalAddr, DWORD newAddr,
+        std::string_view hookLibraries = {});
+#ifdef SYRINGE_TESTING
+private:
+#endif
 
-	// thread info
-	struct ThreadInfo
-	{
-		ThreadInfo() = default;
+    template <typename T>
+    static void ApplyPatch(void* ptr, T&& data) noexcept
+    {
+        std::memcpy(ptr, &data, sizeof(data));
+    }
 
-		ThreadInfo(HANDLE hThread) noexcept
-			: Thread{hThread}
-		{ }
+    // thread info
+    struct ThreadInfo
+    {
+        ThreadInfo() = default;
 
-		ThreadHandle Thread;
-		LPVOID lastBP{ nullptr };
-	};
+        ThreadInfo(HANDLE hThread) noexcept
+            : Thread{ hThread }
+        {
+        }
 
-	std::map<DWORD, ThreadInfo> Threads;
+        ThreadHandle Thread;
+        LPVOID lastBP{ nullptr };
+    };
 
-	// process info
-	PROCESS_INFORMATION pInfo;
+    std::map<DWORD, ThreadInfo> Threads;
 
-	// flags
-	bool bEntryBP{ true };
+    // process info
+    PROCESS_INFORMATION pInfo;
+    HANDLE workingHandle { nullptr };
 
-	// breakpoints
-	struct Hook
-	{
-		char lib[MaxNameLength];
-		char proc[MaxNameLength];
-		void* proc_address;
+    // flags
+    bool bEntryBP{ true };
 
-		size_t num_overridden;
-	};
+    // breakpoints
+    struct Hook
+    {
+        char lib[MaxNameLength];
+        char proc[MaxNameLength];
+        void* proc_address;
 
-	struct BreakpointInfo
-	{
-		BYTE original_opcode{ 0x0u };
-		std::vector<Hook> hooks;
-		VirtualMemoryHandle p_caller_code;
-	};
+        size_t num_overridden;
+    };
 
-	std::map<void*, BreakpointInfo> Breakpoints;
+    struct BreakpointInfo
+    {
+        BYTE original_opcode{ 0x0u };
+        std::vector<Hook> hooks;
+        VirtualMemoryHandle p_caller_code;
+    };
 
-	std::vector<Hook*> v_AllHooks;
-	std::vector<Hook*>::iterator loop_LoadLibrary;
+    std::map<void*, BreakpointInfo> Breakpoints;
 
-	// syringe
-	std::string exe;
-	std::vector<std::string> dlls {};
-	void* pcEntryPoint{ nullptr };
-	void* pImLoadLibrary{ nullptr };
-	void* pImGetProcAddress{ nullptr };
-	VirtualMemoryHandle pAlloc;
-	DWORD dwTimeStamp{ 0u };
-	DWORD dwExeSize{ 0u };
-	DWORD dwExeCRC{ 0u };
+    std::vector<Hook*> v_AllHooks;
+    std::vector<Hook*>::iterator loop_LoadLibrary;
 
-	bool bDLLsLoaded{ false };
-	bool bHooksCreated{ false };
+    // feature flags
+    static constexpr std::string_view FeatureFlagNames[] = {
+        "ESPModification",
+        "ZFPreservation",
+        "ReladdrInstructionFixup",
+    };
 
-	bool bAVLogged{ false };
+    struct FeatureFlagEntry
+    {
+        char lib[MaxNameLength];
+        char symbol[MaxNameLength];
+    };
 
-	// data addresses
-	struct AllocData {
-		static constexpr auto CodeSize = 0x40u;
-		std::byte LoadLibraryFunc[CodeSize];
-		void* ProcAddress;
-		char LibName[MaxNameLength];
-		char ProcName[MaxNameLength];
-	};
+    std::vector<FeatureFlagEntry> v_FeatureFlags;
+    std::vector<FeatureFlagEntry>::iterator loop_FeatureFlags;
+    bool bFeaturesSet{ false };
 
-	AllocData* GetData() const noexcept {
-		return reinterpret_cast<AllocData*>(pAlloc.get());
-	};
+    // syringe
+    std::string exe;
+    std::vector<std::string> dlls{};
+    void* pcEntryPoint{ nullptr };
+    void* pImLoadLibrary{ nullptr };
+    void* pImGetProcAddress{ nullptr };
+    VirtualMemoryHandle pLoaderCode;
+    VirtualMemoryHandle pExchangeData;
+    DWORD dwTimeStamp{ 0u };
+    DWORD dwExeSize{ 0u };
+    DWORD dwExeCRC{ 0u };
 
-	struct HookBuffer {
-		std::map<void*, std::vector<Hook>> hooks;
-		CRC32 checksum;
-		size_t count{ 0 };
+    bool bDetachWhenDone{ false };
+    bool bWaitForProcessEnd{ true };
+    bool bHandshakes{ false };
 
-		void add(void* const eip, Hook const& hook) {
-			auto& h = hooks[eip];
-			h.push_back(hook);
+    bool bDLLsLoaded{ false };
+    bool bHooksCreated{ false };
 
-			checksum.compute(&eip, sizeof(eip));
-			checksum.compute(&hook.num_overridden, sizeof(hook.num_overridden));
-			count++;
-		}
+    bool bAVLogged{ false };
 
-		void add(
-			void* const eip, std::string_view const filename,
-			std::string_view const proc, size_t const num_overridden)
-		{
-			Hook hook;
-			hook.lib[filename.copy(hook.lib, std::size(hook.lib) - 1)] = '\0';
-			hook.proc[proc.copy(hook.proc, std::size(hook.proc) - 1)] = '\0';
-			hook.proc_address = nullptr;
-			hook.num_overridden = num_overridden;
+    struct ExchangeData
+    {
+        void* ProcAddress;
+        char LibName[MaxNameLength];
+        char ProcName[MaxNameLength];
+    };
 
-			add(eip, hook);
-		}
-	};
+    ExchangeData* GetData() const noexcept
+    {
+        return reinterpret_cast<ExchangeData*>(pExchangeData.get());
+    };
 
-	bool ParseInjFileHooks(std::string_view lib, HookBuffer& hooks);
-	bool CanHostDLL(PortableExecutable const& DLL, IMAGE_SECTION_HEADER const& hosts) const;
-	bool ParseHooksSection(PortableExecutable const& DLL, IMAGE_SECTION_HEADER const& hooks, HookBuffer& buffer);
-	std::optional<bool> Handshake(char const* lib, int hooks, unsigned int crc);
+    BYTE* GetLoaderCode() const noexcept
+    {
+        return pLoaderCode.get();
+    };
+
+    struct HookBuffer
+    {
+        std::map<void*, std::vector<Hook>> hooks;
+        CRC32 checksum;
+        size_t count{ 0 };
+
+        void add(void* const eip, Hook const& hook)
+        {
+            auto& h = hooks[eip];
+            h.push_back(hook);
+
+            checksum.compute(&eip, sizeof(eip));
+            checksum.compute(&hook.num_overridden, sizeof(hook.num_overridden));
+            count++;
+        }
+
+        void add(
+            void* const eip, std::string_view const filename,
+            std::string_view const proc, size_t const num_overridden)
+        {
+            Hook hook;
+            hook.lib[filename.copy(hook.lib, std::size(hook.lib) - 1)] = '\0';
+            hook.proc[proc.copy(hook.proc, std::size(hook.proc) - 1)] = '\0';
+            hook.proc_address = nullptr;
+            hook.num_overridden = num_overridden;
+
+            add(eip, hook);
+        }
+    };
+
+    bool ParseInjFileHooks(std::string_view lib, HookBuffer& hooks);
+    bool CanHostDLL(PortableExecutable const& DLL, IMAGE_SECTION_HEADER const& hosts) const;
+    bool ParseHooksSection(PortableExecutable const& DLL, IMAGE_SECTION_HEADER const& hooks, HookBuffer& buffer);
+    std::optional<bool> Handshake(char const* lib, int hooks, unsigned int crc);
 };
 
 // disable "structures padded due to alignment specifier"
 #pragma warning(push)
 #pragma warning(disable : 4324)
-struct alignas(16) hookdecl {
-	unsigned int hookAddr;
-	unsigned int hookSize;
-	DWORD hookNamePtr;
+struct alignas(16) hookdecl
+{
+    unsigned int hookAddr;
+    unsigned int hookSize;
+    DWORD hookNamePtr;
 };
 
-struct alignas(16) hostdecl {
-	unsigned int hostChecksum;
-	DWORD hostNamePtr;
+struct alignas(16) hostdecl
+{
+    unsigned int hostChecksum;
+    DWORD hostNamePtr;
 };
 
 static_assert(sizeof(hookdecl) == 16);
@@ -207,14 +283,14 @@ static_assert(sizeof(hostdecl) == 16);
 
 struct SyringeHandshakeInfo
 {
-	int cbSize;
-	int num_hooks;
-	unsigned int checksum;
-	DWORD exeFilesize;
-	DWORD exeTimestamp;
-	unsigned int exeCRC;
-	int cchMessage;
-	char* Message;
+    int cbSize;
+    int num_hooks;
+    unsigned int checksum;
+    DWORD exeFilesize;
+    DWORD exeTimestamp;
+    unsigned int exeCRC;
+    int cchMessage;
+    char* Message;
 };
 
-using SYRINGEHANDSHAKEFUNC = HRESULT(__cdecl *)(SyringeHandshakeInfo*);
+using SYRINGEHANDSHAKEFUNC = HRESULT(__cdecl*)(SyringeHandshakeInfo*);
