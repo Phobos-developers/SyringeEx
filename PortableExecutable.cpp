@@ -1,4 +1,4 @@
-#include "PortableExecutable.h"
+﻿#include "PortableExecutable.h"
 
 #include "Log.h"
 
@@ -172,4 +172,71 @@ IMAGE_SECTION_HEADER const* PortableExecutable::FindSection(
     {
         return &(*found);
     }
+}
+
+
+std::unordered_map<std::string, DWORD> PortableExecutable::GetExportSymbols() const noexcept
+{
+    std::unordered_map<std::string, DWORD> exportSymbols;
+
+    IMAGE_DATA_DIRECTORY const& exportTable = uPEHeader.OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT];
+    if (exportTable.Size == 0) {
+        return exportSymbols;
+    }
+    DWORD rawExportAddress = VirtualToRaw(exportTable.VirtualAddress);
+    if (rawExportAddress == 0) {
+        return exportSymbols;
+    }
+    IMAGE_EXPORT_DIRECTORY exportDir;
+    if (!ReadBytes(rawExportAddress, sizeof(IMAGE_EXPORT_DIRECTORY), &exportDir)) {
+        return exportSymbols;
+    }
+    std::string moduleName;
+    if (!ReadCString(VirtualToRaw(exportDir.Name), moduleName))
+    {
+        moduleName = "";
+    }
+
+    std::vector<DWORD> addressOfFunctions;
+    size_t funcCount = exportDir.NumberOfFunctions;
+    addressOfFunctions.resize(funcCount);
+    if (!ReadBytes(VirtualToRaw(exportDir.AddressOfFunctions), sizeof(DWORD) * funcCount, addressOfFunctions.data())) {
+        return exportSymbols;
+    }
+
+    std::vector<DWORD> addressOfNames;
+    size_t nameCount = exportDir.NumberOfNames;
+    addressOfNames.resize(nameCount);
+    if (!ReadBytes(VirtualToRaw(exportDir.AddressOfNames), sizeof(DWORD) * nameCount, addressOfNames.data())) {
+        return exportSymbols;
+    }
+
+    std::vector<WORD> addressOfNameOrdinals;
+    addressOfNameOrdinals.resize(nameCount);
+    if (!ReadBytes(VirtualToRaw(exportDir.AddressOfNameOrdinals), sizeof(WORD) * nameCount, addressOfNameOrdinals.data())) {
+        return exportSymbols;
+    }
+
+    for (size_t i = 0; i < nameCount; ++i) {
+        DWORD nameRVA = addressOfNames[i];
+        DWORD rawNameAddress = VirtualToRaw(nameRVA);
+        if (rawNameAddress == 0) {
+            continue;
+        }
+
+        std::string nameANSI;
+        if (!ReadCString(rawNameAddress, nameANSI)) {
+            continue;
+        }
+
+        WORD ordinal = addressOfNameOrdinals[i];
+        if (ordinal >= funcCount) {
+            continue; // 无效序号
+        }
+
+        DWORD functionRVA = addressOfFunctions[ordinal];
+        exportSymbols[nameANSI] = functionRVA;
+    }
+
+    return exportSymbols;
 }
