@@ -8,7 +8,9 @@
 
 #include <algorithm>
 #include <array>
+#include <cstring>
 #include <fstream>
+#include <limits>
 #include <memory>
 #include <numeric>
 #include <set>
@@ -17,6 +19,17 @@
 #include <DbgHelp.h>
 
 using namespace std;
+
+// Log fatal setup failures without making optional export reads noisy.
+[[noreturn]] static void ThrowMemoryError(char const* const operation,
+    void const* const address, size_t const size, std::string const& exe)
+{
+    auto const error = GetLastError();
+    auto const code = error ? error : ERROR_ERRORS_ENCOUNTERED;
+    Log::WriteLine("SyringeDebugger: %s failed at %p (size=%zu, error=%lu).",
+        operation, const_cast<void*>(address), size, static_cast<unsigned long>(code));
+    throw_lasterror(code, exe);
+}
 
 void SyringeDebugger::DebugProcess(std::string_view const arguments)
 {
@@ -67,10 +80,13 @@ VirtualMemoryHandle SyringeDebugger::AllocMem(void* address, size_t size)
 
 void SyringeDebugger::MakeExecutable(VirtualMemoryHandle const& memory, size_t size)
 {
-    if (!memory.protect(size, PAGE_EXECUTE_READ)
-        || !memory.flush_instruction_cache(size))
+    if (!memory.protect(size, PAGE_EXECUTE_READ))
     {
-        throw_lasterror_or(ERROR_ERRORS_ENCOUNTERED, exe);
+        ThrowMemoryError("VirtualProtectEx", memory.get(), size, exe);
+    }
+    if (!memory.flush_instruction_cache(size))
+    {
+        ThrowMemoryError("FlushInstructionCache", memory.get(), size, exe);
     }
 }
 
@@ -383,7 +399,10 @@ DWORD SyringeDebugger::HandleException(DEBUG_EVENT const& dbgEvent)
             }
         }
 
-        // load DLLs and retrieve proc addresses
+        // load the hook DLLs and resolve hook and feature flag addresses. Each call into
+        // the target costs two debug events, so the DLLs are loaded once each and every
+        // address is then read from their loaded export tables; only what that cannot resolve
+        // goes through GetProcAddress in the target
         if (!bDLLsLoaded)
         {
             // restore
@@ -392,108 +411,34 @@ DWORD SyringeDebugger::HandleException(DEBUG_EVENT const& dbgEvent)
                 throw_lasterror_or(ERROR_ERRORS_ENCOUNTERED, exe);
             }
 
-            if (loop_LoadLibrary == v_AllHooks.end())
+            if (bLoaderStarted)
             {
-                loop_LoadLibrary = v_AllHooks.begin();
-            }
-            else
-            {
-                auto const& hook = *loop_LoadLibrary;
-                ReadMem(&GetData()->ProcAddress, &hook->proc_address, 4);
-
-                if (!hook->proc_address)
-                {
-                    Log::WriteLine(
-                        __FUNCTION__ ": Could not retrieve ProcAddress for: %s "
-                        "- %s",
-                        hook->lib, hook->proc);
-                }
-
-                ++loop_LoadLibrary;
+                FinishLoaderCall(v_LoaderCalls[loaderNext++]);
             }
 
-            if (loop_LoadLibrary != v_AllHooks.end())
-            {
-                auto const& hook = *loop_LoadLibrary;
-                PatchMem(&GetData()->LibName, hook->lib, MaxNameLength);
-                PatchMem(&GetData()->ProcName, hook->proc, MaxNameLength);
+            bLoaderStarted = true;
 
+            if (loaderNext == v_LoaderCalls.size() && !bExportsResolved)
+            {
+                bExportsResolved = true;
+                ResolveFromExports();
+            }
+
+            if (loaderNext < v_LoaderCalls.size())
+            {
+                StartLoaderCall(v_LoaderCalls[loaderNext]);
                 context.Eip = reinterpret_cast<DWORD>(GetLoaderCode());
             }
             else
             {
                 Log::WriteLine(__FUNCTION__ ": Finished retrieving proc addresses.");
-                bDLLsLoaded = true;
 
                 if (!v_FeatureFlags.empty())
                 {
-                    Log::WriteLine(__FUNCTION__ ": Starting feature flags resolution...");
-                    loop_FeatureFlags = v_FeatureFlags.begin();
-                    auto const& entry = *loop_FeatureFlags;
-                    PatchMem(&GetData()->LibName, entry.lib, MaxNameLength);
-                    PatchMem(&GetData()->ProcName, entry.symbol, MaxNameLength);
-
-                    context.Eip = reinterpret_cast<DWORD>(GetLoaderCode());
+                    Log::WriteLine(__FUNCTION__ ": Finished setting feature flags.");
                 }
-                else
-                {
-                    bFeaturesSet = true;
-                    context.Eip = reinterpret_cast<DWORD>(pcEntryPoint);
-                }
-            }
 
-            // single step mode
-            context.EFlags |= 0x100;
-            context.ContextFlags = CONTEXT_CONTROL;
-            SetThreadContext(currentThread, &context);
-
-            threadInfo.lastBP = exceptAddr;
-
-            return DBG_CONTINUE;
-        }
-
-        // set feature flags in loaded DLLs
-        if (!bFeaturesSet)
-        {
-            // restore
-            if (!PatchCode(exceptAddr, &Breakpoints[exceptAddr].original_opcode, 1))
-            {
-                throw_lasterror_or(ERROR_ERRORS_ENCOUNTERED, exe);
-            }
-
-            // read the resolved address of the feature flag in the target process
-            void* flagAddr = nullptr;
-            ReadMem(&GetData()->ProcAddress, &flagAddr, 4);
-
-            if (flagAddr)
-            {
-                BYTE const trueVal = 1;
-                PatchMem(flagAddr, &trueVal, 1);
-                Log::WriteLine(
-                    __FUNCTION__ ": Set feature flag \"%s\" in \"%s\" at 0x%08X",
-                    loop_FeatureFlags->symbol, loop_FeatureFlags->lib, flagAddr);
-            }
-            else
-            {
-                Log::WriteLine(
-                    __FUNCTION__ ": Feature flag \"%s\" not exported by \"%s\", skipping.",
-                    loop_FeatureFlags->symbol, loop_FeatureFlags->lib);
-            }
-
-            ++loop_FeatureFlags;
-
-            if (loop_FeatureFlags != v_FeatureFlags.end())
-            {
-                auto const& entry = *loop_FeatureFlags;
-                PatchMem(&GetData()->LibName, entry.lib, MaxNameLength);
-                PatchMem(&GetData()->ProcName, entry.symbol, MaxNameLength);
-
-                context.Eip = reinterpret_cast<DWORD>(GetLoaderCode());
-            }
-            else
-            {
-                Log::WriteLine(__FUNCTION__ ": Finished setting feature flags.");
-                bFeaturesSet = true;
+                bDLLsLoaded = true;
 
                 context.Eip = reinterpret_cast<DWORD>(pcEntryPoint);
             }
@@ -563,7 +508,19 @@ DWORD SyringeDebugger::HandleException(DEBUG_EVENT const& dbgEvent)
                 static BYTE const jmp_back[] = { 0xE9, INIT, INIT, INIT, INIT };
                 static BYTE const jmp[] = { 0xE9, INIT, INIT, INIT, INIT };
 
-                std::vector<BYTE> code;
+                struct Site
+                {
+                    BYTE* address;
+                    BreakpointInfo const* info;
+                    size_t overridden;
+                    size_t offset; // of its caller code in the allocation
+                    size_t capacity;
+                };
+
+                std::vector<Site> sites;
+                size_t total = 0;
+                auto const callerLimit = std::min<size_t>(std::numeric_limits<DWORD>::max(),
+                    std::vector<BYTE>{}.max_size());
 
                 for (auto& it : Breakpoints)
                 {
@@ -574,7 +531,7 @@ DWORD SyringeDebugger::HandleException(DEBUG_EVENT const& dbgEvent)
 
                     auto const [count, overridden] = std::accumulate(
                         it.second.hooks.cbegin(), it.second.hooks.cend(),
-                        std::make_pair(0u, 0u), [](auto acc, auto const& hook)
+                        std::make_pair(size_t{0}, size_t{0}), [](auto acc, auto const& hook)
                         {
                             if (hook.proc_address) {
                                 if (acc.second < hook.num_overridden) {
@@ -589,117 +546,196 @@ DWORD SyringeDebugger::HandleException(DEBUG_EVENT const& dbgEvent)
                         continue;
                     }
 
-                    std::set<std::string_view> rebuildLibraries;
-                    for (auto const& hook : it.second.hooks)
+                    // Check each term before multiplying or adding. The whole block must
+                    // also fit the DWORD size accepted by PatchMem.
+                    auto const remaining = callerLimit - total;
+                    if (remaining < sizeof(jmp_back)
+                        || count > (remaining - sizeof(jmp_back)) / sizeof(code_call)
+                        || overridden > (remaining - sizeof(jmp_back) - count * sizeof(code_call)) / 3)
                     {
-                        if (hook.proc_address && hook.num_overridden == overridden)
+                        Log::WriteLine("SyringeDebugger: Caller size overflow at %p (hooks=%zu, overridden=%zu, total=%zu).",
+                            it.first, count, overridden, total);
+                        throw_lasterror(ERROR_ARITHMETIC_OVERFLOW, exe);
+                    }
+                    // Relative instruction re-encoding may expand the overwritten bytes.
+                    auto const capacity = count * sizeof(code_call) + sizeof(jmp_back) + overridden * 3;
+                    sites.push_back({ static_cast<BYTE*>(it.first), &it.second, overridden, total, capacity });
+                    total += capacity;
+                }
+
+                if (!sites.empty())
+                {
+                    // every caller is built here and written to one allocation in one go,
+                    // instead of one allocation and write per hook site
+                    pCallerCode = AllocMem(nullptr, total);
+                    auto const base = static_cast<BYTE*>(pCallerCode.get());
+                    std::vector<BYTE> callers(total, INT3);
+
+                    auto const patchEnd = [](Site const& site)
+                    {
+                        return site.address + std::max(site.overridden, sizeof(jmp));
+                    };
+
+                    struct PreparedPatch
+                    {
+                        BYTE* address;
+                        std::vector<BYTE> bytes;
+                        std::vector<size_t> regionEnds;
+                    };
+                    std::vector<PreparedPatch> patches;
+
+                    for (size_t first = 0; first < sites.size();)
+                    {
+                        // Batch within one region, but keep overlapping sites together
+                        // across boundaries so each sees the previous sites' patches.
+                        MEMORY_BASIC_INFORMATION region{};
+                        if (!VirtualQueryEx(workingHandle, sites[first].address, &region, sizeof(region)))
                         {
-                            rebuildLibraries.emplace(hook.lib);
+                            ThrowMemoryError("VirtualQueryEx", sites[first].address, sizeof(region), exe);
                         }
-                    }
+                        auto regionEnd = static_cast<BYTE*>(region.BaseAddress) + region.RegionSize;
 
-                    std::string rebuildLibraryNames;
-                    for (auto const library : rebuildLibraries)
-                    {
-                        if (!rebuildLibraryNames.empty())
+                        auto const runStart = sites[first].address;
+                        auto runEnd = patchEnd(sites[first]);
+                        auto last = first + 1;
+
+                        while (last < sites.size()
+                            && sites[last].address <= runEnd + MaxPatchGap
+                            && (patchEnd(sites[last]) <= regionEnd || sites[last].address < runEnd))
                         {
-                            rebuildLibraryNames += ", ";
+                            runEnd = std::max(runEnd, patchEnd(sites[last]));
+                            ++last;
                         }
-                        rebuildLibraryNames += '"';
-                        rebuildLibraryNames += library;
-                        rebuildLibraryNames += '"';
-                    }
 
-                    // read the overridden bytes from the target process
-                    std::vector<BYTE> original_bytes(overridden);
-                    ReadMem(it.first, original_bytes.data(), overridden);
-
-                    // use a conservative upper bound for rebuilt instructions,
-                    // since relative instruction re-encoding may change sizes
-                    // (e.g. short branch -> near branch)
-                    auto const max_rebuilt = overridden * 3;
-                    auto const sz = count * sizeof(code_call) + sizeof(jmp_back) + max_rebuilt;
-
-                    code.resize(sz);
-                    auto p_code = code.data();
-
-                    it.second.p_caller_code = AllocMem(nullptr, sz);
-                    auto const base = it.second.p_caller_code.get();
-
-                    // write caller code
-                    for (auto const& hook : it.second.hooks)
-                    {
-                        if (hook.proc_address)
+                        std::vector<BYTE> memory(static_cast<size_t>(runEnd - runStart));
+                        std::vector<size_t> regionEnds;
+                        for (size_t offset = 0; offset < memory.size();)
                         {
-                            ApplyPatch(p_code, code_call);		 // code
-                            ApplyPatch(p_code + 0x03, it.first); // PUSH HookAddress
-
-                            auto const rel = RelativeOffset(
-                                base + (p_code - code.data() + 0x0D), hook.proc_address);
-                            ApplyPatch(p_code + 0x09, rel); // CALL
-
-                            p_code += sizeof(code_call);
+                            auto const end = std::min(runEnd, regionEnd);
+                            auto const size = static_cast<DWORD>(end - (runStart + offset));
+                            if (!ReadMem(runStart + offset, memory.data() + offset, size))
+                            {
+                                ThrowMemoryError("ReadProcessMemory", runStart + offset, size, exe);
+                            }
+                            offset += size;
+                            regionEnds.push_back(offset);
+                            if (offset < memory.size())
+                            {
+                                if (!VirtualQueryEx(workingHandle, runStart + offset, &region, sizeof(region)))
+                                {
+                                    ThrowMemoryError("VirtualQueryEx", runStart + offset, sizeof(region), exe);
+                                }
+                                regionEnd = static_cast<BYTE*>(region.BaseAddress) + region.RegionSize;
+                            }
                         }
+
+                        for (auto i = first; i < last; ++i)
+                        {
+                            auto const& site = sites[i];
+                            auto const original = memory.data() + (site.address - runStart);
+                            auto const callerStart = callers.data() + site.offset;
+                            auto const callerEnd = callerStart + site.capacity;
+                            auto p_code = callerStart;
+
+                            auto const remote = [&](BYTE const* local)
+                            {
+                                return base + (local - callers.data());
+                            };
+
+                            // write caller code
+                            for (auto const& hook : site.info->hooks)
+                            {
+                                if (hook.proc_address)
+                                {
+                                    ApplyPatch(p_code, code_call);		    // code
+                                    ApplyPatch(p_code + 0x03, site.address); // PUSH HookAddress
+
+                                    auto const rel = RelativeOffset(remote(p_code + 0x0D), hook.proc_address);
+                                    ApplyPatch(p_code + 0x09, rel); // CALL
+
+                                    p_code += sizeof(code_call);
+                                }
+                            }
+
+                            // rebuild overridden bytes, adjusting relative addresses
+                            if (site.overridden)
+                            {
+                                std::set<std::string_view> rebuildLibraries;
+                                for (auto const& hook : site.info->hooks)
+                                {
+                                    if (hook.proc_address && hook.num_overridden == site.overridden)
+                                    {
+                                        rebuildLibraries.emplace(hook.lib);
+                                    }
+                                }
+
+                                std::string rebuildLibraryNames;
+                                for (auto const library : rebuildLibraries)
+                                {
+                                    if (!rebuildLibraryNames.empty())
+                                    {
+                                        rebuildLibraryNames += ", ";
+                                    }
+                                    rebuildLibraryNames += '"';
+                                    rebuildLibraryNames += library;
+                                    rebuildLibraryNames += '"';
+                                }
+
+                                auto const originalAddr = reinterpret_cast<DWORD>(site.address);
+                                auto const newAddr = reinterpret_cast<DWORD>(remote(p_code));
+
+                                auto rebuilt = RebuildInstructions(
+                                    original, site.overridden, originalAddr, newAddr,
+                                    rebuildLibraryNames);
+
+                                // Leave room for the jump back inside this site's slot.
+                                auto const remaining = static_cast<size_t>(callerEnd - p_code);
+                                if (remaining < sizeof(jmp_back) || rebuilt.size() > remaining - sizeof(jmp_back))
+                                {
+                                    Log::WriteLine("SyringeDebugger: Caller buffer too small at %p (rebuilt=%zu, remaining=%zu, jump=%zu).",
+                                        site.address, rebuilt.size(), remaining, sizeof(jmp_back));
+                                    throw_lasterror(ERROR_INSUFFICIENT_BUFFER, exe);
+                                }
+                                std::memcpy(p_code, rebuilt.data(), rebuilt.size());
+                                p_code += rebuilt.size();
+                            }
+
+                            // write the jump back
+                            auto const rel = RelativeOffset(remote(p_code + 0x05), site.address + 0x05);
+                            ApplyPatch(p_code, jmp_back);
+                            ApplyPatch(p_code + 0x01, rel);
+                            p_code += sizeof(jmp_back);
+
+                            // patch original code
+                            auto const rel2 = RelativeOffset(site.address + 5, remote(callerStart));
+                            std::memset(original, NOP, std::max(site.overridden, sizeof(jmp)));
+                            ApplyPatch(original, jmp);
+                            ApplyPatch(original + 0x01, rel2);
+                        }
+
+                        patches.push_back({ runStart, std::move(memory), std::move(regionEnds) });
+
+                        first = last;
                     }
 
-                    // rebuild overridden bytes, adjusting relative addresses
-                    if (overridden)
+                    if (!PatchMem(base, callers.data(), static_cast<DWORD>(callers.size())))
                     {
-                        auto const originalAddr = reinterpret_cast<DWORD>(it.first);
-                        auto const newAddr = reinterpret_cast<DWORD>(
-                            base + (p_code - code.data()));
-
-                        auto rebuilt = RebuildInstructions(
-                            original_bytes.data(), overridden, originalAddr, newAddr,
-                            rebuildLibraryNames);
-
-                        std::memcpy(p_code, rebuilt.data(), rebuilt.size());
-                        p_code += rebuilt.size();
+                        ThrowMemoryError("WriteProcessMemory", base, callers.size(), exe);
                     }
+                    MakeExecutable(pCallerCode, total);
 
-                    // write the jump back
-                    auto const rel = RelativeOffset(
-                        base + (p_code - code.data() + 0x05),
-                        static_cast<BYTE*>(it.first) + 0x05);
-                    ApplyPatch(p_code, jmp_back);
-                    ApplyPatch(p_code + 0x01, rel);
-                    p_code += sizeof(jmp_back);
-
-                    auto const actual_sz = static_cast<size_t>(p_code - code.data());
-                    if (!PatchMem(base, code.data(), actual_sz))
+                    // Publish jumps only when all callers are ready and executable.
+                    for (auto const& patch : patches)
                     {
-                        throw_lasterror_or(ERROR_ERRORS_ENCOUNTERED, exe);
-                    }
-                    MakeExecutable(it.second.p_caller_code, sz);
-
-                    // dump
-                    /*
-                    Log::WriteLine("Call dump for 0x%08X at 0x%08X:", it.first, base);
-
-                    code.resize(sz);
-                    ReadMem(it.second.p_caller_code, code.data(), sz);
-
-                    std::string dump_str{ "\t\t" };
-                    for(auto const& byte : code) {
-                        char buffer[0x10];
-                        sprintf(buffer, "%02X ", byte);
-                        dump_str += buffer;
-                    }
-
-                    Log::WriteLine(dump_str.c_str());
-                    Log::WriteLine();*/
-
-                    // patch original code
-                    auto const p_original_code = static_cast<BYTE*>(it.first);
-
-                    auto const rel2 = RelativeOffset(p_original_code + 5, base);
-                    code.assign(std::max(overridden, sizeof(jmp)), NOP);
-                    ApplyPatch(code.data(), jmp);
-                    ApplyPatch(code.data() + 0x01, rel2);
-
-                    if (!PatchCode(p_original_code, code.data(), static_cast<DWORD>(code.size())))
-                    {
-                        throw_lasterror_or(ERROR_ERRORS_ENCOUNTERED, exe);
+                        size_t offset = 0;
+                        for (auto const end : patch.regionEnds)
+                        {
+                            if (!PatchCode(patch.address + offset, patch.bytes.data() + offset, static_cast<DWORD>(end - offset)))
+                            {
+                                ThrowMemoryError("PatchCode", patch.address + offset, end - offset, exe);
+                            }
+                            offset = end;
+                        }
                     }
                 }
 
@@ -872,6 +908,7 @@ void SyringeDebugger::Run(std::string_view const arguments)
         0x52,								// push edx
         0x68, INIT, INIT, INIT, INIT,		// push offset pdLibName
         0xFF, 0x15, INIT, INIT, INIT, INIT, // call pImLoadLibrary
+        0xA3, INIT, INIT, INIT, INIT,		// mov pdModuleBase, eax
         0x85, 0xC0,							// test eax, eax
         0x74, 0x0C,							// jz
         0x68, INIT, INIT, INIT, INIT,		// push offset pdProcName
@@ -890,9 +927,10 @@ void SyringeDebugger::Run(std::string_view const arguments)
 
     ApplyPatch(code.data() + 0x04, &GetData()->LibName);
     ApplyPatch(code.data() + 0x0A, pImLoadLibrary);
-    ApplyPatch(code.data() + 0x13, &GetData()->ProcName);
-    ApplyPatch(code.data() + 0x1A, pImGetProcAddress);
-    ApplyPatch(code.data() + 0x1F, &GetData()->ProcAddress);
+    ApplyPatch(code.data() + 0x0F, &GetData()->ModuleBase);
+    ApplyPatch(code.data() + 0x18, &GetData()->ProcName);
+    ApplyPatch(code.data() + 0x1F, pImGetProcAddress);
+    ApplyPatch(code.data() + 0x24, &GetData()->ProcAddress);
     if (!PatchMem(pLoaderCode, code.data(), code.size()))
     {
         throw_lasterror_or(ERROR_ERRORS_ENCOUNTERED, exe);
@@ -904,8 +942,17 @@ void SyringeDebugger::Run(std::string_view const arguments)
     // breakpoints for DLL loading and proc address retrieving
     bDLLsLoaded = false;
     bHooksCreated = false;
-    bFeaturesSet = false;
-    loop_LoadLibrary = v_AllHooks.end();
+
+    // first load every hook DLL once; ResolveFromExports adds calls for what it can't resolve
+    v_LoaderCalls.clear();
+    for (size_t i = 0; i < v_Libraries.size(); ++i)
+    {
+        v_LoaderCalls.push_back({ i, "" });
+    }
+
+    loaderNext = 0;
+    bLoaderStarted = false;
+    bExportsResolved = false;
 
     // set breakpoint
     if (!SetBP(pcEntryPoint))
@@ -1006,6 +1053,254 @@ void SyringeDebugger::Run(std::string_view const arguments)
     Log::WriteLine(
         __FUNCTION__ ": Done with exit code %X (%u).", exit_code, exit_code);
     Log::WriteLine();
+}
+
+void SyringeDebugger::StartLoaderCall(LoaderCall const& call)
+{
+    ExchangeData request{};
+    strncpy_s(request.LibName, v_Libraries[call.library].name.c_str(), _TRUNCATE);
+    strncpy_s(request.ProcName, call.proc.c_str(), _TRUNCATE);
+
+    if (!PatchMem(GetData(), &request, sizeof(request)))
+    {
+        ThrowMemoryError("WriteProcessMemory", GetData(), sizeof(request), exe);
+    }
+}
+
+void SyringeDebugger::FinishLoaderCall(LoaderCall const& call)
+{
+    void* results[2] = {};
+    if (!ReadMem(&GetData()->ModuleBase, results, sizeof(results)))
+    {
+        ThrowMemoryError("ReadProcessMemory", &GetData()->ModuleBase, sizeof(results), exe);
+    }
+    auto const module = results[0];
+    auto const address = results[1];
+
+    if (call.hook)
+    {
+        call.hook->proc_address = address;
+
+        if (!address)
+        {
+            Log::WriteLine(
+                __FUNCTION__ ": Could not retrieve ProcAddress for: %s - %s",
+                call.hook->lib, call.hook->proc);
+        }
+    }
+    else if (call.flag)
+    {
+        ApplyFeatureFlag(*call.flag, address);
+    }
+    else
+    {
+        v_Libraries[call.library].module = module;
+
+        if (!module)
+        {
+            Log::WriteLine(__FUNCTION__ ": Could not load \"%s\".", v_Libraries[call.library].name.c_str());
+        }
+    }
+}
+
+// Read one snapshot of the loaded module's export directory. If its tables live
+// outside the directory or cannot be read, let GetProcAddress resolve the symbols.
+bool SyringeDebugger::ReadModuleExports(HookLibrary& library)
+{
+    library.exports.clear();
+    IMAGE_DOS_HEADER dos{};
+    IMAGE_NT_HEADERS nt{};
+    auto const base = static_cast<BYTE*>(library.module);
+    if (!ReadMem(base, &dos, sizeof(dos))
+        || dos.e_magic != IMAGE_DOS_SIGNATURE
+        || dos.e_lfanew < 0
+        || !ReadMem(base + dos.e_lfanew, &nt, sizeof(nt))
+        || nt.Signature != IMAGE_NT_SIGNATURE
+        || nt.OptionalHeader.Magic != IMAGE_NT_OPTIONAL_HDR32_MAGIC
+        || nt.OptionalHeader.NumberOfRvaAndSizes <= IMAGE_DIRECTORY_ENTRY_EXPORT)
+    {
+        return false;
+    }
+
+    auto const& dir = nt.OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT];
+    if (!dir.VirtualAddress && !dir.Size)
+    {
+        return true;
+    }
+    auto const imageSize = nt.OptionalHeader.SizeOfImage;
+    if (!dir.VirtualAddress || dir.Size < sizeof(IMAGE_EXPORT_DIRECTORY)
+        || dir.VirtualAddress >= imageSize || dir.Size > imageSize - dir.VirtualAddress)
+    {
+        return false;
+    }
+
+    std::vector<BYTE> bytes(dir.Size);
+    if (!ReadMem(base + dir.VirtualAddress, bytes.data(), dir.Size))
+    {
+        return false;
+    }
+
+    // Subtraction-based checks avoid overflow in RVA and array-size arithmetic.
+    auto const contains = [&](DWORD rva, size_t count, size_t elementSize)
+    {
+        if (rva < dir.VirtualAddress)
+        {
+            return false;
+        }
+        size_t const offset = rva - dir.VirtualAddress;
+        return offset <= bytes.size() && count <= (bytes.size() - offset) / elementSize;
+    };
+
+    IMAGE_EXPORT_DIRECTORY exports{};
+    std::memcpy(&exports, bytes.data(), sizeof(exports));
+    if (!exports.NumberOfNames)
+    {
+        return true;
+    }
+    if (!contains(exports.AddressOfNames, exports.NumberOfNames, sizeof(DWORD))
+        || !contains(exports.AddressOfNameOrdinals, exports.NumberOfNames, sizeof(WORD))
+        || !contains(exports.AddressOfFunctions, exports.NumberOfFunctions, sizeof(DWORD)))
+    {
+        return false;
+    }
+
+    for (DWORD i = 0; i < exports.NumberOfNames; ++i)
+    {
+        DWORD nameRva;
+        WORD ordinal;
+        DWORD rva;
+        std::memcpy(&nameRva, bytes.data() + (exports.AddressOfNames - dir.VirtualAddress) + i * sizeof(DWORD), sizeof(nameRva));
+        std::memcpy(&ordinal, bytes.data() + (exports.AddressOfNameOrdinals - dir.VirtualAddress) + i * sizeof(WORD), sizeof(ordinal));
+        if (ordinal >= exports.NumberOfFunctions || !contains(nameRva, 1, 1))
+        {
+            return false;
+        }
+        std::memcpy(&rva, bytes.data() + (exports.AddressOfFunctions - dir.VirtualAddress) + ordinal * sizeof(DWORD), sizeof(rva));
+        if (rva >= imageSize)
+        {
+            return false;
+        }
+        auto const name = reinterpret_cast<char const*>(bytes.data() + (nameRva - dir.VirtualAddress));
+        auto const end = static_cast<char const*>(std::memchr(name, 0, bytes.size() - (nameRva - dir.VirtualAddress)));
+        if (!end)
+        {
+            return false;
+        }
+        bool const forwarded = rva >= dir.VirtualAddress && rva - dir.VirtualAddress < dir.Size;
+        library.exports.emplace(std::string(name, end), PEExport{ rva, forwarded });
+    }
+    return true;
+}
+
+void SyringeDebugger::ResolveFromExports()
+{
+    std::unordered_map<std::string_view, size_t> byName;
+    std::vector<bool> usable(v_Libraries.size());
+
+    for (size_t i = 0; i < v_Libraries.size(); ++i)
+    {
+        auto& library = v_Libraries[i];
+        byName.emplace(library.name, i);
+        usable[i] = library.module && ReadModuleExports(library);
+
+        if (library.module && !usable[i])
+        {
+            Log::WriteLine(
+                __FUNCTION__ ": Could not read exports from loaded \"%s\"; resolving them one by one.",
+                library.name.c_str());
+        }
+    }
+
+    // an address, null where GetProcAddress would return null, or nothing where only
+    // GetProcAddress in the target can tell (a forwarded export, or an unreadable export directory)
+    auto const resolve = [&](size_t const i, char const* const name) -> std::optional<void*>
+    {
+        auto const& library = v_Libraries[i];
+
+        if (!library.module)
+        {
+            return nullptr;
+        }
+
+        if (!usable[i])
+        {
+            return std::nullopt;
+        }
+
+        auto const it = library.exports.find(name);
+        if (it == library.exports.end() || !it->second.RVA)
+        {
+            return nullptr;
+        }
+
+        if (it->second.Forwarded)
+        {
+            return std::nullopt;
+        }
+
+        return static_cast<BYTE*>(library.module) + it->second.RVA;
+    };
+
+    for (auto const hook : v_AllHooks)
+    {
+        auto const i = byName.at(hook->lib);
+
+        if (auto const address = resolve(i, hook->proc))
+        {
+            hook->proc_address = *address;
+
+            if (!hook->proc_address)
+            {
+                Log::WriteLine(
+                    __FUNCTION__ ": Could not retrieve ProcAddress for: %s - %s",
+                    hook->lib, hook->proc);
+            }
+        }
+        else
+        {
+            v_LoaderCalls.push_back({ i, hook->proc, hook });
+        }
+    }
+
+    if (!v_FeatureFlags.empty())
+    {
+        Log::WriteLine(__FUNCTION__ ": Starting feature flags resolution...");
+    }
+
+    for (auto const& flag : v_FeatureFlags)
+    {
+        auto const i = byName.at(flag.lib);
+
+        if (auto const address = resolve(i, flag.symbol))
+        {
+            ApplyFeatureFlag(flag, *address);
+        }
+        else
+        {
+            v_LoaderCalls.push_back({ i, flag.symbol, nullptr, &flag });
+        }
+    }
+}
+
+void SyringeDebugger::ApplyFeatureFlag(FeatureFlagEntry const& flag, void* const address)
+{
+    if (address)
+    {
+        BYTE const trueVal = 1;
+        if (!PatchMem(address, &trueVal, 1))
+        {
+            ThrowMemoryError("WriteProcessMemory", address, 1, exe);
+        }
+        Log::WriteLine(
+            __FUNCTION__ ": Set feature flag \"%s\" in \"%s\" at 0x%08X",
+            flag.symbol, flag.lib, address);
+    }
+    else
+    {
+        Log::WriteLine(
+            __FUNCTION__ ": Feature flag \"%s\" not exported by \"%s\", skipping.",
+            flag.symbol, flag.lib);
+    }
 }
 
 void SyringeDebugger::RemoveBP(LPVOID const address, bool const restoreOpcode)
@@ -1157,7 +1452,6 @@ void SyringeDebugger::FindDLLs()
                     {
                         auto const eip = it.first;
                         auto& h = Breakpoints[eip];
-                        h.p_caller_code.clear();
                         h.original_opcode = 0x00;
                         h.hooks.insert(
                             h.hooks.end(), it.second.begin(), it.second.end());
@@ -1190,6 +1484,7 @@ void SyringeDebugger::FindDLLs()
 
     // build feature flag entries for each unique DLL
     v_FeatureFlags.clear();
+    v_Libraries.clear();
     {
         std::set<std::string> uniqueLibs;
         for (auto const& hook : v_AllHooks)
@@ -1203,6 +1498,9 @@ void SyringeDebugger::FindDLLs()
                     flagName.copy(entry.symbol, MaxNameLength - 1);
                     v_FeatureFlags.push_back(entry);
                 }
+
+                auto& library = v_Libraries.emplace_back();
+                library.name = hook->lib;
             }
         }
     }

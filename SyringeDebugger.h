@@ -13,6 +13,7 @@
 #include <optional>
 #include <ranges>
 #include <string_view>
+#include <unordered_map>
 
 #include <windows.h>
 
@@ -162,13 +163,55 @@ private:
     {
         BYTE original_opcode{ 0x0u };
         std::vector<Hook> hooks;
-        VirtualMemoryHandle p_caller_code;
     };
 
     std::map<void*, BreakpointInfo> Breakpoints;
 
     std::vector<Hook*> v_AllHooks;
-    std::vector<Hook*>::iterator loop_LoadLibrary;
+
+    // caller code for every hook, in one allocation in the target
+    VirtualMemoryHandle pCallerCode;
+
+    // patch sites closer together than this are read and written in one go
+    static constexpr size_t MaxPatchGap = 0x1000u;
+
+    struct PEExport
+    {
+        DWORD RVA;
+        bool Forwarded;
+    };
+
+    // a DLL that hooks live in, and the module the target loaded for it
+    struct HookLibrary
+    {
+        std::string name;
+        std::unordered_map<std::string, PEExport> exports;
+        void* module{ nullptr };
+    };
+
+    std::vector<HookLibrary> v_Libraries;
+
+    // one LoadLibrary/GetProcAddress call run in the target per breakpoint round trip;
+    // without hook or flag it only loads the library and records its module
+    struct FeatureFlagEntry;
+    struct LoaderCall
+    {
+        size_t library;
+        std::string proc;
+        Hook* hook{ nullptr };
+        FeatureFlagEntry const* flag{ nullptr };
+    };
+
+    std::vector<LoaderCall> v_LoaderCalls;
+    size_t loaderNext{ 0 };
+    bool bLoaderStarted{ false };
+    bool bExportsResolved{ false };
+
+    void StartLoaderCall(LoaderCall const& call);
+    void FinishLoaderCall(LoaderCall const& call);
+    void ResolveFromExports();
+    bool ReadModuleExports(HookLibrary& library);
+    void ApplyFeatureFlag(FeatureFlagEntry const& flag, void* address);
 
     // feature flags
     static constexpr std::string_view FeatureFlagNames[] = {
@@ -184,8 +227,6 @@ private:
     };
 
     std::vector<FeatureFlagEntry> v_FeatureFlags;
-    std::vector<FeatureFlagEntry>::iterator loop_FeatureFlags;
-    bool bFeaturesSet{ false };
 
     // syringe
     std::string exe;
@@ -210,6 +251,7 @@ private:
 
     struct ExchangeData
     {
+        void* ModuleBase;
         void* ProcAddress;
         char LibName[MaxNameLength];
         char ProcName[MaxNameLength];
