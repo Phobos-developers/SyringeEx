@@ -5,7 +5,7 @@
 #define IDI_ICON1                       104
 
 // Next default values for new objects
-// 
+//
 #ifdef APSTUDIO_INVOKED
 #ifndef APSTUDIO_READONLY_SYMBOLS
 #define _APS_NEXT_RESOURCE_VALUE        105
@@ -20,7 +20,7 @@
 #define SYRINGEEX_VER_EPOCH  0
 #define SYRINGEEX_VER_MAJOR  1
 #define SYRINGEEX_VER_MINOR  0
-#define SYRINGEEX_VER_PATCH  2
+#define SYRINGEEX_VER_PATCH  3
 
 /* useful numeric expansion for VERSIONINFO (comma-separated) */
 #define SYRINGEEX_VER SYRINGEEX_VER_EPOCH, SYRINGEEX_VER_MAJOR, SYRINGEEX_VER_MINOR, SYRINGEEX_VER_PATCH
