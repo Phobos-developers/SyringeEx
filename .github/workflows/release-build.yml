@@ -7,6 +7,8 @@ on:
 jobs:
   build:
     runs-on: windows-2022
+    permissions:
+      contents: write
 
     env:
       ARCHIVE_NAME: Syringe-${{ github.ref_name }}.zip

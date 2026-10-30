@@ -23,14 +23,83 @@ runs:
     - name: Add MSBuild to PATH
       uses: microsoft/setup-msbuild@v2
       with:
-        vs-version: '[17.0,)'   # v143 / VS 2022+
+        vs-version: '[17.0,18.0)'
 
     - uses: ammaraskar/msvc-problem-matcher@master
+
+    - name: Restore MSVC toolchain
+      id: toolchain-cache
+      uses: actions/cache/restore@v4
+      with:
+        path: C:\syringe-msvc\14.44.35207
+        key: syringe-msvc-17.14.7-x86-${{ hashFiles('scripts/prepare_ci_toolchain.ps1') }}
+
+    - name: Download and prepare MSVC toolchain
+      if: steps.toolchain-cache.outputs.cache-hit != 'true'
+      shell: pwsh
+      run: ./scripts/prepare_ci_toolchain.ps1 -Destination 'C:\syringe-msvc\14.44.35207'
+
+    - name: Verify MSVC toolchain
+      shell: pwsh
+      run: |
+        $files = @{
+          'bin\Hostx64\x86\cl.exe' = 'd1cebe4ca9d3727750090a1394def24c8ef1106dafbc737ea55fa71e1f940737'
+          'bin\Hostx64\x86\c1.dll' = '945b3f7b103d0ca23f0dabd9da4da9755d4b3c15c511a63b138062898a5b4614'
+          'bin\Hostx64\x86\c1xx.dll' = 'a4c968c201ea2fc435f012aac561dbbab1dbd68126af2195e2efa8a7ee992c1d'
+          'bin\Hostx64\x86\c2.dll' = '8f6dd0c4d7f6e37585acac94ee6a211f515b43132e53cb564e28c025be2de242'
+          'bin\Hostx64\x86\link.exe' = '60c1aa5309be71ebfbe7978d53a126a699c7db40d2a9791b5ec197dd5a8518fd'
+          'lib\x86\libcmt.lib' = '7579b57420ba48e5ba44b154c1a4fe578560e52b47036833ad367a0f038dc080'
+          'lib\x86\libcpmt.lib' = 'c136b7d46aa449a36ce582c1f1f062d1b7184291f4b3ac299a6da980575eb8ec'
+          'lib\x86\libvcruntime.lib' = '240088f42c75d33cbdbada5ed58d5fb6095a87fe565bf78fb77e4de2c5f36ec1'
+          'lib\x86\oldnames.lib' = '5d0995750177e324494a496e450e94edd028cedae041e4fbba530d8afaaf26a7'
+        }
+        foreach ($file in $files.Keys) {
+          $path = Join-Path 'C:\syringe-msvc\14.44.35207' $file
+          if ((Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash -ne $files[$file]) { throw "Toolchain hash mismatch: $path" }
+        }
+
+    - name: Restore Windows SDK libraries
+      id: sdk-cache
+      uses: actions/cache/restore@v4
+      with:
+        path: C:\syringe-sdk\10.0.26100.3916
+        key: syringe-sdk-10.0.26100.3916-x86-${{ hashFiles('scripts/prepare_ci_sdk.ps1') }}
+
+    - name: Prepare Windows SDK libraries
+      if: steps.sdk-cache.outputs.cache-hit != 'true'
+      shell: pwsh
+      run: ./scripts/prepare_ci_sdk.ps1 -Destination 'C:\syringe-sdk\10.0.26100.3916'
+
+    - name: Verify and use Windows SDK libraries
+      shell: pwsh
+      run: |
+        $sdk = 'C:\syringe-sdk\10.0.26100.3916'
+        $files = @{
+          'ucrt\x86\libucrt.lib' = '1100af192005ac3a0991b35e5919fde9b9a9c3bc794530fa67894efb339c78de'
+          'um\x86\kernel32.lib' = '7ac751468e8769d0825a6c78720e5bd2f837f47db192847942b808c76dcec42b'
+        }
+        foreach ($file in $files.Keys) {
+          $path = Join-Path $sdk $file
+          if ((Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash -ne $files[$file]) { throw "SDK hash mismatch: $path" }
+        }
+        $entries = @(Get-ChildItem -LiteralPath $sdk -File -Recurse | ForEach-Object {
+          $relative = $_.FullName.Substring($sdk.Length + 1).Replace('\', '/').ToLowerInvariant()
+          "$relative|$((Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant())"
+        })
+        [Array]::Sort($entries, [StringComparer]::Ordinal)
+        if ($entries.Count -ne 460) { throw "Unexpected number of SDK libraries: $($entries.Count)" }
+        $data = [Text.Encoding]::UTF8.GetBytes(($entries -join "`n") + "`n")
+        $digest = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($data)).ToLowerInvariant()
+        if ($digest -ne '52b09cb9dd4b7bbc16de2d49fb7c1571157430e687ce9ec0e065ecc27988cb14') { throw "SDK library set does not match the local toolchain: $digest" }
+        $lib = "${env:ProgramFiles(x86)}\Windows Kits\10\Lib\10.0.26100.0"
+        foreach ($part in @('ucrt', 'um')) {
+          Copy-Item -Path (Join-Path $sdk "$part\x86\*") -Destination (Join-Path $lib "$part\x86") -Force
+        }
 
     - name: Build
       working-directory: ${{ github.workspace }}
       # The Any CPU solution platform has no Build.0 entries, so Platform=Win32 must be explicit.
-      run: msbuild /m /p:Configuration=${{ inputs.build-config }} /p:Platform=Win32 /v:q ${{ inputs.sln-path }}
+      run: msbuild /m /p:Configuration=${{ inputs.build-config }} /p:Platform=Win32 /p:PreferredToolArchitecture=x64 /p:VCToolsVersion=14.44.35207 /p:VCToolsInstallDir_170=C:\syringe-msvc\14.44.35207\ /p:VCToolsInstallDir=C:\syringe-msvc\14.44.35207\ /p:WindowsTargetPlatformVersion=10.0.26100.0 /v:q ${{ inputs.sln-path }}
       shell: cmd
 
     - name: Run tests
@@ -38,6 +107,20 @@ runs:
       working-directory: ${{ github.workspace }}
       run: tests\bin\Tests.exe
       shell: cmd
+
+    - name: Save MSVC toolchain
+      if: steps.toolchain-cache.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v4
+      with:
+        path: C:\syringe-msvc\14.44.35207
+        key: ${{ steps.toolchain-cache.outputs.cache-primary-key }}
+
+    - name: Save Windows SDK libraries
+      if: steps.sdk-cache.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v4
+      with:
+        path: C:\syringe-sdk\10.0.26100.3916
+        key: ${{ steps.sdk-cache.outputs.cache-primary-key }}
 
     - name: Upload artifact
       if: ${{ success() && inputs.artifact-name != '' }}
